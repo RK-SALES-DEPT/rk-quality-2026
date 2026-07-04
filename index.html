@@ -89,6 +89,7 @@
   .crit-toggle input{width:auto;margin:0}
   .cmt-link{color:var(--brand);cursor:pointer}
   .crit textarea{grid-column:1/-1;margin-top:4px;min-height:52px;resize:vertical}
+  .crit.needs-fill{box-shadow:inset 3px 0 0 #f59e0b}
   .crit.is-critical{background:var(--warn-l)}
 
   /* totals */
@@ -99,6 +100,8 @@
   .tot .crit{color:var(--warn)}
   .totals .spacer{flex:1}
   .crit-warn{background:var(--warn-l);color:var(--warn);border-radius:8px;padding:6px 12px;font-weight:600;font-size:13px}
+  .req-warn{background:#fff7e6;color:#b45309;border-radius:8px;padding:6px 12px;font-weight:600;font-size:13px}
+  .req-ok{background:#e7f7ee;color:var(--ok);border-radius:8px;padding:6px 12px;font-weight:600;font-size:13px}
 
   /* tables */
   table{width:100%;border-collapse:collapse;background:#fff}
@@ -370,6 +373,16 @@ function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("sh
 function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); if(isNaN(d)) return iso; return d.toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"}); }
 function allCriteria(blank){ const out=[]; blank.sections.forEach(s=>s.criteria.forEach(c=>out.push(c))); return out; }
 
+function driveId(u){ let m=u.match(/\/file\/d\/([\w-]+)/); if(m) return m[1]; m=u.match(/[?&]id=([\w-]+)/); if(m) return m[1]; return null; }
+function audioMarkup(u){
+  u=(u||"").trim(); if(!u) return "";
+  if(/\.(mp3|wav|ogg|m4a)(\?|$)/i.test(u)) return `<audio controls src="${esc(u)}" style="width:100%"></audio>`;
+  if(u.includes("drive.google.com")){ const id=driveId(u);
+    if(id) return `<iframe src="https://drive.google.com/file/d/${id}/preview" style="width:100%;height:70px;border:0" allow="autoplay"></iframe><div style="margin-top:6px"><a href="${esc(u)}" target="_blank" rel="noopener" style="font-size:12.5px">Открыть в Google Drive</a></div>`;
+  }
+  return `<a class="btn ghost sm" href="${esc(u)}" target="_blank" rel="noopener">▶ Открыть запись в новой вкладке</a>`;
+}
+
 function computeScore(ev, blank){
   let sum=0, wsum=0, filled=0, hasCritical=false;
   blank.sections.forEach(sec=>sec.criteria.forEach(c=>{
@@ -465,22 +478,22 @@ function renderEvaluate(){
   const meta = el(`<div class="card"><div class="meta-grid"></div></div>`);
   const mg = meta.querySelector(".meta-grid");
   const empOpts = `<option value="">— выберите —</option>` + emps.map(e=>`<option ${e.name===c.employee?"selected":""}>${esc(e.name)}</option>`).join("");
-  mg.appendChild(el(`<div class="field"><label>Сотрудник</label><select id="ev-emp">${empOpts}</select></div>`));
+  mg.appendChild(el(`<div class="field"><label>Сотрудник<span class="req">*</span></label><select id="ev-emp">${empOpts}</select></div>`));
   mg.appendChild(el(`<div class="field"><label>Кому звонил (номер)</label><input id="ev-phone" value="${esc(c.phone)}" placeholder="79000000000"></div>`));
   mg.appendChild(el(`<div class="field"><label>Начало разговора</label><input type="datetime-local" id="ev-date" value="${esc(c.callDate)}"></div>`));
   mg.appendChild(el(`<div class="field"><label>Длительность</label><input id="ev-dur" value="${esc(c.duration)}" placeholder="08:30"></div>`));
-  mg.appendChild(el(`<div class="field" style="grid-column:1/-1"><label>Ссылка на запись (UIS / Битрикс / mp3)</label><input id="ev-audio" value="${esc(c.audioUrl)}" placeholder="https://…"></div>`));
+  mg.appendChild(el(`<div class="field" style="grid-column:1/-1"><label>Ссылка на запись</label><input id="ev-audio" value="${esc(c.audioUrl)}" placeholder="https://drive.google.com/file/d/… или прямой .mp3"><div class="hint">Google Drive (доступ «всем, у кого есть ссылка») или прямой mp3 — проиграется прямо здесь. Ссылка из Битрикса откроется в новой вкладке.</div></div>`));
   wrap.appendChild(meta);
 
   // аудио превью
   const audioBox = el(`<div id="ev-audiobox"></div>`);
   wrap.appendChild(audioBox);
-  const renderAudio=()=>{ audioBox.innerHTML=""; const u=c.audioUrl.trim(); if(!u) return;
-    if(/\.(mp3|wav|ogg|m4a)(\?|$)/i.test(u)) audioBox.appendChild(el(`<div class="card" style="padding:12px"><audio controls src="${esc(u)}"></audio></div>`));
-    else audioBox.appendChild(el(`<div class="card" style="padding:12px"><a class="btn ghost sm link-btn" href="${esc(u)}" target="_blank" rel="noopener">▶ Открыть запись в новой вкладке</a></div>`)); };
+  const renderAudio=()=>{ audioBox.innerHTML=""; const u=(c.audioUrl||"").trim(); if(!u) return;
+    audioBox.appendChild(el(`<div class="card" style="padding:12px">${audioMarkup(u)}</div>`)); };
   renderAudio();
 
   // секции бланка
+  wrap.appendChild(el(`<div class="hint" style="margin:2px 2px 8px"><span class="req">*</span> — обязательные пункты. Пока не заполнены, подсвечены жёлтой полосой слева.</div>`));
   const sectionsBox = document.createElement("div");
   blank.sections.forEach((sec,si)=>sectionsBox.appendChild(renderEvalSection(sec,si)));
   wrap.appendChild(sectionsBox);
@@ -523,7 +536,8 @@ function renderCriterion(cr){
   const isNA = (val===undefined||val===null);
   const isCrit = !!(c.critical && c.critical[cr.id]);
   const openC = !!c._openComments[cr.id] || !!(c.comments[cr.id]);
-  const row = el(`<div class="crit ${isCrit?"is-critical":""}">
+  const needsFill = cr.required && isNA;
+  const row = el(`<div class="crit ${isCrit?"is-critical":""} ${needsFill?"needs-fill":""}">
     <div>
       <div class="cname">${esc(cr.name)}${cr.required?'<span class="req">*</span>':""}${cr.weight&&cr.weight!==1?`<span class="wbadge">x${cr.weight}</span>`:'<span class="wbadge">x1</span>'}<span class="qmark" title="${esc(cr.hint)}">?</span></div>
       <div class="hint">${esc(cr.hint)}</div>
@@ -563,11 +577,14 @@ function renderCriterion(cr){
 function renderTotals(){
   const c=state.current;
   const {sum, average, filled, hasCritical} = computeScore(c, state.blank);
+  const missingReq = allCriteria(state.blank).filter(cr=>cr.required && (c.scores[cr.id]===undefined||c.scores[cr.id]===null)).length;
+  const reqChip = missingReq>0 ? `<div class="req-warn">Обязательных не заполнено: ${missingReq}</div>` : `<div class="req-ok">✓ Все обязательные заполнены</div>`;
   const box = el(`<div class="totals">
     <div class="tot"><span>Средняя оценка</span><b class="avg">${average===null?"—":average}</b></div>
     <div class="tot"><span>Сумма оценок</span><b>${sum}</b></div>
     <div class="tot"><span>Заполнено критериев</span><b>${filled}</b></div>
     <div class="spacer"></div>
+    ${reqChip}
     ${hasCritical?'<div class="crit-warn">⚠ Критическая ошибка — итог обнулён</div>':""}
     <button class="btn" id="ev-save2">Сохранить оценку</button>
   </div>`);
@@ -906,10 +923,7 @@ function renderEvalReadonly(ev){
     <div class="field"><label>Начало разговора</label><div>${fmtDate(ev.callDate)}</div></div>
     <div class="field"><label>Длительность</label><div>${esc(ev.duration)||"—"}</div></div>
   </div></div>`));
-  if(ev.audioUrl){ const u=ev.audioUrl;
-    if(/\.(mp3|wav|ogg|m4a)(\?|$)/i.test(u)) wrap.appendChild(el(`<div class="card" style="padding:12px"><audio controls src="${esc(u)}"></audio></div>`));
-    else wrap.appendChild(el(`<div class="card" style="padding:12px"><a class="btn ghost sm" href="${esc(u)}" target="_blank" rel="noopener">▶ Открыть запись</a></div>`));
-  }
+  if(ev.audioUrl){ wrap.appendChild(el(`<div class="card" style="padding:12px">${audioMarkup(ev.audioUrl)}</div>`)); }
   blank.sections.forEach(sec=>{
     const rows=sec.criteria.map(cr=>{
       const v=ev.scores?ev.scores[cr.id]:null;
