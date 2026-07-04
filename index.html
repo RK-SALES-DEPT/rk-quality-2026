@@ -345,7 +345,7 @@ const Store = {
   async listEvaluations(){
     if(this.backend==="memory") return [...this._mem.evals];
     const q = await db.collection("qm_evaluations").orderBy("callDate","desc").get();
-    return q.docs.map(d=>({id:d.id,...d.data()}));
+    return q.docs.map(d=>({...d.data(), id:d.id}));
   },
   async saveEvaluation(ev){
     if(this.backend==="memory"){
@@ -354,7 +354,7 @@ const Store = {
       return ev.id;
     }
     if(ev.id){ const id=ev.id; const cp={...ev}; delete cp.id; await db.collection("qm_evaluations").doc(id).set(cp); return id; }
-    const ref = await db.collection("qm_evaluations").add(ev); return ref.id;
+    const cp2={...ev}; delete cp2.id; const ref = await db.collection("qm_evaluations").add(cp2); return ref.id;
   },
   async deleteEvaluation(id){
     if(this.backend==="memory"){ this._mem.evals=this._mem.evals.filter(e=>e.id!==id); return; }
@@ -375,10 +375,17 @@ const esc = s => (s==null?"":String(s)).replace(/[&<>"']/g,m=>({"&":"&amp;","<":
 const $ = sel => document.querySelector(sel);
 function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),1800); }
 function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); if(isNaN(d)) return iso; return d.toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"}); }
+const MONTHS_RU=["январь","февраль","март","апрель","май","июнь","июль","август","сентябрь","октябрь","ноябрь","декабрь"];
+function monthsOf(evals){ const s=new Set(); (evals||[]).forEach(e=>{const m=(e.callDate||"").slice(0,7); if(m.length===7) s.add(m);}); return [...s].sort().reverse(); }
+function monthLabel(m){ const p=m.split("-"); return (MONTHS_RU[(+p[1])-1]||m)+" "+p[0]; }
 function allCriteria(blank){ const out=[]; blank.sections.forEach(s=>s.criteria.forEach(c=>out.push(c))); return out; }
 
-function driveId(u){ let m=u.match(/\/file\/d\/([\w-]+)/); if(m) return m[1]; m=u.match(/[?&]id=([\w-]+)/); if(m) return m[1]; return null; }
-function audioMarkup(u){
+function monthSelect(evs, sel){
+  const months=[...new Set(evs.map(e=>(e.callDate||"").slice(0,7)).filter(x=>x&&x.length===7))].sort().reverse();
+  return `<select class="month-filter" style="width:auto;min-width:150px"><option value="">Все месяцы</option>${months.map(m=>`<option value="${m}" ${sel===m?"selected":""}>${monthLabel(m)}</option>`).join("")}</select>`;
+}
+
+function driveId(u){ let m=u.match(/\/file\/d\/([\w-]+)/); if(m) return m[1]; m=u.match(/[?&]id=([\w-]+)/); if(m) return m[1]; return null; }function audioMarkup(u){
   u=(u||"").trim(); if(!u) return "";
   if(/\.(mp3|wav|ogg|m4a)(\?|$)/i.test(u)) return `<audio controls src="${esc(u)}" style="width:100%"></audio>`;
   if(u.includes("drive.google.com")){ const id=driveId(u);
@@ -457,7 +464,7 @@ async function render(){
    6. ВКЛАДКА «ОЦЕНИТЬ ЗВОНОК»
    ============================================================ */
 function newEvaluation(){
-  state.current = { id:null, employee:"", group:"", phone:"", callDate:"", duration:"", audioUrl:"",
+  state.current = { id:null, employee:"", group:"", phone:"", callDate:"", duration:"", audioUrl:"", bitrixUrl:"",
     blankName:state.blank.name, scores:{}, comments:{}, critical:{}, controllerComment:"",
     evaluatedBy:state.controller, createdAt:null, _openComments:{} };
 }
@@ -487,6 +494,7 @@ function renderEvaluate(){
   mg.appendChild(el(`<div class="field"><label>Начало разговора</label><input type="datetime-local" id="ev-date" value="${esc(c.callDate)}"></div>`));
   mg.appendChild(el(`<div class="field"><label>Длительность</label><input id="ev-dur" value="${esc(c.duration)}" placeholder="08:30"></div>`));
   mg.appendChild(el(`<div class="field" style="grid-column:1/-1"><label>Ссылка на запись</label><input id="ev-audio" value="${esc(c.audioUrl)}" placeholder="https://drive.google.com/file/d/… или прямой .mp3"><div class="hint">Google Drive (доступ «всем, у кого есть ссылка») или прямой mp3 — проиграется прямо здесь. Ссылка из Битрикса откроется в новой вкладке.</div></div>`));
+  mg.appendChild(el(`<div class="field" style="grid-column:1/-1"><label>Ссылка на звонок в Битрикс</label><input id="ev-bitrix" value="${esc(c.bitrixUrl||"")}" placeholder="https://…bitrix24.ru/… (карточка звонка/сделки)"><div class="hint">Открывается кнопкой в новой вкладке (за логином Битрикса). Видна и контролёру, и сотруднику.</div></div>`));
   wrap.appendChild(meta);
 
   // аудио превью
@@ -514,6 +522,7 @@ function renderEvaluate(){
   wrap.querySelector("#ev-date").oninput = e=>c.callDate=e.target.value;
   wrap.querySelector("#ev-dur").oninput = e=>c.duration=e.target.value;
   const au=wrap.querySelector("#ev-audio"); au.oninput=e=>c.audioUrl=e.target.value; au.onchange=renderAudio;
+  wrap.querySelector("#ev-bitrix").oninput = e=>c.bitrixUrl=e.target.value;
   wrap.querySelector("#ev-comment").oninput = e=>c.controllerComment=e.target.value;
   wrap.querySelector("#ev-cancel").onclick = ()=>{ newEvaluation(); render(); };
   wrap.querySelector("#ev-save").onclick = saveCurrentEvaluation;
@@ -620,7 +629,7 @@ async function saveCurrentEvaluation(){
   const {sum, average, hasCritical} = computeScore(c, blank);
   const rec = {
     id:c.id, employee:c.employee, group:c.group||"", phone:c.phone||"", callDate:c.callDate||new Date().toISOString().slice(0,16),
-    duration:c.duration||"", audioUrl:c.audioUrl||"", blankName:blank.name,
+    duration:c.duration||"", audioUrl:c.audioUrl||"", bitrixUrl:c.bitrixUrl||"", blankName:blank.name,
     scores:c.scores, comments:c.comments, critical:c.critical||{}, controllerComment:c.controllerComment||"",
     average:average, sum:sum, hasCritical:hasCritical,
     evaluatedBy:c.evaluatedBy||state.controller, createdAt:c.createdAt||new Date().toISOString()
@@ -639,9 +648,21 @@ async function saveCurrentEvaluation(){
    ============================================================ */
 function renderList(){
   const wrap=document.createElement("div");
-  wrap.appendChild(el(`<div class="page-head"><h2>Оценки звонков</h2><button class="btn sm" id="new-eval">+ Новая оценка</button></div>`));
-  const evals = state.evals||[];
-  if(!evals.length){ wrap.appendChild(el(`<div class="card empty">Оценок пока нет. Нажмите «Новая оценка», чтобы оценить первый звонок.</div>`)); }
+  const all = state.evals||[];
+  let evals = all.slice();
+  if(listMonth) evals = evals.filter(e=>(e.callDate||"").slice(0,7)===listMonth);
+  if(listEmp) evals = evals.filter(e=>e.employee===listEmp);
+  const emps=[...new Set(all.map(e=>e.employee).filter(Boolean))].sort();
+  const head=el(`<div class="page-head"><h2>Оценки звонков</h2>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      ${monthSelect(all,listMonth)}
+      <select class="emp-filter" style="width:auto;min-width:170px"><option value="">Все сотрудники</option>${emps.map(n=>`<option value="${esc(n)}" ${listEmp===n?"selected":""}>${esc(n)}</option>`).join("")}</select>
+      <button class="btn sm" id="new-eval">+ Новая оценка</button>
+    </div></div>`);
+  head.querySelector(".month-filter").onchange=e=>{ listMonth=e.target.value; render(); };
+  head.querySelector(".emp-filter").onchange=e=>{ listEmp=e.target.value; render(); };
+  wrap.appendChild(head);
+  if(!evals.length){ wrap.appendChild(el(`<div class="card empty">${(listMonth||listEmp)?"По фильтру оценок нет.":"Оценок пока нет. Нажмите «Новая оценка», чтобы оценить первый звонок."}</div>`)); }
   else {
     const t = el(`<div class="tbl-wrap"><table><thead><tr>
       <th>Дата</th><th>Сотрудник</th><th>Номер</th><th class="num">Средняя</th><th>Оценил</th><th></th>
@@ -666,6 +687,7 @@ function renderList(){
   wrap.querySelector("#new-eval").onclick=()=>{ newEvaluation(); state.tab="evaluate"; render(); };
   return wrap;
 }
+let listMonth="", listEmp="";
 function openEvaluation(ev){
   state.current = JSON.parse(JSON.stringify(ev));
   state.current._openComments={};
@@ -910,16 +932,20 @@ function renderSettings(){
    10б. ВКЛАДКА СОТРУДНИКА «МОИ ЗВОНКИ» (только просмотр)
    ============================================================ */
 let myCallsOpen = null;
+let myMonth = "";
 function renderMyCalls(){
   const wrap=document.createElement("div");
-  const mine=(state.evals||[]).filter(e=>e.employee===state.controller).sort((a,b)=>(b.callDate||"").localeCompare(a.callDate||""));
+  const mineAll=(state.evals||[]).filter(e=>e.employee===state.controller).sort((a,b)=>(b.callDate||"").localeCompare(a.callDate||""));
   if(myCallsOpen){
-    const ev=mine.find(e=>e.id===myCallsOpen);
+    const ev=mineAll.find(e=>e.id===myCallsOpen);
     if(ev){ wrap.appendChild(renderEvalReadonly(ev)); return wrap; }
     myCallsOpen=null;
   }
-  wrap.appendChild(el(`<div class="page-head"><h2>Мои звонки</h2><span style="color:var(--muted)">${mine.length} оцен.</span></div>`));
-  if(!mine.length){ wrap.appendChild(el(`<div class="card empty">Пока нет оценённых звонков.</div>`)); return wrap; }
+  const mine = myMonth ? mineAll.filter(e=>(e.callDate||"").slice(0,7)===myMonth) : mineAll;
+  const head=el(`<div class="page-head"><h2>Мои звонки</h2><div style="display:flex;gap:10px;align-items:center">${monthSelect(mineAll,myMonth)}<span style="color:var(--muted)">${mine.length} оцен.</span></div></div>`);
+  head.querySelector(".month-filter").onchange=e=>{ myMonth=e.target.value; render(); };
+  wrap.appendChild(head);
+  if(!mine.length){ wrap.appendChild(el(`<div class="card empty">${myMonth?"За выбранный месяц оценок нет.":"Пока нет оценённых звонков."}</div>`)); return wrap; }
   const t=el(`<div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Номер</th><th class="num">Средняя</th><th>Оценил</th><th></th></tr></thead><tbody></tbody></table></div>`);
   const tb=t.querySelector("tbody");
   mine.forEach(ev=>{
@@ -940,7 +966,7 @@ function renderEvalReadonly(ev){
     <div class="field"><label>Начало разговора</label><div>${fmtDate(ev.callDate)}</div></div>
     <div class="field"><label>Длительность</label><div>${esc(ev.duration)||"—"}</div></div>
   </div></div>`));
-  if(ev.audioUrl){ wrap.appendChild(el(`<div class="card" style="padding:12px">${audioMarkup(ev.audioUrl)}</div>`)); }
+  if(ev.audioUrl){ wrap.appendChild(el(`<div class="card" style="padding:12px"><div class="hint" style="margin-bottom:6px">Запись звонка</div>${audioMarkup(ev.audioUrl)}</div>`)); }
   blank.sections.forEach(sec=>{
     const rows=sec.criteria.map(cr=>{
       const v=ev.scores?ev.scores[cr.id]:null;
