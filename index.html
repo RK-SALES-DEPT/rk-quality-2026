@@ -91,6 +91,12 @@
   .cmt-link{color:var(--brand);cursor:pointer}
   .cmt-link.req-link{color:var(--warn);font-weight:700}
   .crit.needs-comment{box-shadow:inset 3px 0 0 var(--warn)}
+  .crit.lowered{box-shadow:inset 3px 0 0 #f59e0b;background:#fffdf7}
+  .ro-comment{background:#fff7e6;border:1px solid #ffe2a8;border-radius:8px;padding:7px 11px;margin-top:7px;color:#7c4a03;font-size:13px}
+  .stat-cards{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+  .stat-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 18px;min-width:150px}
+  .stat-card .v{font-size:24px;font-weight:700;color:var(--brand)}
+  .stat-card .l{color:var(--muted);font-size:12px}
   .cmt-required{border-color:var(--warn)!important}
   .crit textarea{grid-column:1/-1;margin-top:4px;min-height:52px;resize:vertical}
   .crit.needs-fill{box-shadow:inset 3px 0 0 #f59e0b}
@@ -380,6 +386,8 @@ function monthsOf(evals){ const s=new Set(); (evals||[]).forEach(e=>{const m=(e.
 function monthLabel(m){ const p=m.split("-"); return (MONTHS_RU[(+p[1])-1]||m)+" "+p[0]; }
 function allCriteria(blank){ const out=[]; blank.sections.forEach(s=>s.criteria.forEach(c=>out.push(c))); return out; }
 
+function fmtScore(n){ if(n==null) return "—"; return Number.isInteger(n)? String(n) : (Math.round(n*100)/100).toFixed(2); }
+function fmtScore2(n){ if(n==null) return "—"; return (Math.round(n*100)/100).toFixed(2); }
 function monthSelect(evs, sel){
   const months=[...new Set(evs.map(e=>(e.callDate||"").slice(0,7)).filter(x=>x&&x.length===7))].sort().reverse();
   return `<select class="month-filter" style="width:auto;min-width:150px"><option value="">Все месяцы</option>${months.map(m=>`<option value="${m}" ${sel===m?"selected":""}>${monthLabel(m)}</option>`).join("")}</select>`;
@@ -403,7 +411,7 @@ function computeScore(ev, blank){
     filled++; const w=c.weight||1; sum+=v*w; wsum+=w;
   }));
   const raw = wsum>0 ? sum/wsum : null;
-  const average = hasCritical ? 0 : (raw===null?null:Math.round(raw));
+  const average = hasCritical ? 0 : (raw===null?null:Math.round(raw*100)/100);
   return {sum:Math.round(sum), average, filled, hasCritical};
 }
 
@@ -448,16 +456,22 @@ $("#tabs").addEventListener("click", e=>{
 function setActiveTab(){
   document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("active", b.dataset.tab===state.tab));
 }
+async function ensureEvals(force){
+  if(force || !state.evals){
+    const v=$("#view"); if(v) v.innerHTML='<div class="empty">Загрузка…</div>';
+    state.evals = await Store.listEvaluations();
+  }
+}
 async function render(){
   if(state.role==="employee") state.tab="mycalls";
   setActiveTab();
   const v = $("#view");
   if(state.tab==="evaluate"){ if(!state.current) newEvaluation(); v.innerHTML=""; v.appendChild(renderEvaluate()); }
-  else if(state.tab==="list"){ v.innerHTML='<div class="empty">Загрузка…</div>'; state.evals = await Store.listEvaluations(); v.innerHTML=""; v.appendChild(renderList()); }
-  else if(state.tab==="stats"){ v.innerHTML='<div class="empty">Загрузка…</div>'; state.evals = await Store.listEvaluations(); v.innerHTML=""; v.appendChild(renderStats()); }
+  else if(state.tab==="list"){ await ensureEvals(); v.innerHTML=""; v.appendChild(renderList()); }
+  else if(state.tab==="stats"){ await ensureEvals(); v.innerHTML=""; v.appendChild(renderStats()); }
   else if(state.tab==="blank"){ v.innerHTML=""; v.appendChild(renderBlankEditor()); }
   else if(state.tab==="settings"){ v.innerHTML=""; v.appendChild(renderSettings()); }
-  else if(state.tab==="mycalls"){ v.innerHTML='<div class="empty">Загрузка…</div>'; state.evals=await Store.listEvaluations(); v.innerHTML=""; v.appendChild(renderMyCalls()); }
+  else if(state.tab==="mycalls"){ await ensureEvals(); v.innerHTML=""; v.appendChild(renderMyCalls()); }
 }
 
 /* ============================================================
@@ -597,7 +611,7 @@ function renderTotals(){
   const reqChip = missingReq>0 ? `<div class="req-warn">Обязательных не заполнено: ${missingReq}</div>` : `<div class="req-ok">✓ Все обязательные заполнены</div>`;
   const cmtChip = needCmt>0 ? `<div class="crit-warn">Пояснить снижения: ${needCmt}</div>` : "";
   const box = el(`<div class="totals">
-    <div class="tot"><span>Средняя оценка</span><b class="avg">${average===null?"—":average}</b></div>
+    <div class="tot"><span>Средняя оценка</span><b class="avg">${fmtScore(average)}</b></div>
     <div class="tot"><span>Сумма оценок</span><b>${sum}</b></div>
     <div class="tot"><span>Заполнено критериев</span><b>${filled}</b></div>
     <div class="spacer"></div>
@@ -638,6 +652,7 @@ async function saveCurrentEvaluation(){
     await Store.saveEvaluation(rec);
     toast("Оценка сохранена");
     newEvaluation();
+    state.evals=null;
     state.tab="list";
     render();
   }catch(e){ console.error(e); toast("Ошибка сохранения"); }
@@ -669,7 +684,7 @@ function renderList(){
     </tr></thead><tbody></tbody></table></div>`);
     const tb=t.querySelector("tbody");
     evals.forEach(ev=>{
-      const avg = ev.hasCritical ? `<span class="pill r">0 · крит.</span>` : (ev.average==null?`<span class="pill n">—</span>`:`<span class="pill ${ev.average>=90?"g":ev.average>=70?"n":"r"}">${ev.average}</span>`);
+      const avg = ev.hasCritical ? `<span class="pill r">0 · крит.</span>` : (ev.average==null?`<span class="pill n">—</span>`:`<span class="pill ${ev.average>=90?"g":ev.average>=70?"n":"r"}">${fmtScore(ev.average)}</span>`);
       const row = el(`<tr>
         <td>${fmtDate(ev.callDate)}</td>
         <td>${esc(ev.employee)}</td>
@@ -737,7 +752,7 @@ function renderStats(){
     byGroup[g].list.push(ev);
   });
 
-  const avg = arr => arr.length ? Math.round(arr.reduce((a,b)=>a+b,0)/arr.length) : null;
+  const avg = arr => arr.length ? (arr.reduce((a,b)=>a+b,0)/arr.length) : null;
 
   const t = el(`<div class="tbl-wrap"><table><thead><tr>
     <th>Группа / сотрудник</th><th class="num">Средняя оценка</th><th class="num">Оценено звонков</th><th class="num">Крит. ошибок</th>
@@ -751,21 +766,21 @@ function renderStats(){
     const gScores=[]; let gCount=0, gCrit=0;
     Object.values(grp.emps).forEach(e=>{ e.scores.forEach(s=>gScores.push(s)); gCount+=e.scores.length; gCrit+=e.crit; });
     // строка группы
-    tb.appendChild(el(`<tr class="grp-row"><td>${esc(g)}</td><td class="num">${gScores.length?avg(gScores):"—"}</td><td class="num">${gCount}</td><td class="num">${gCrit||"—"}</td></tr>`));
+    tb.appendChild(el(`<tr class="grp-row"><td>${esc(g)}</td><td class="num">${gScores.length?fmtScore2(avg(gScores)):"—"}</td><td class="num">${gCount}</td><td class="num">${gCrit||"—"}</td></tr>`));
     // сотрудники
     Object.keys(grp.emps).forEach(name=>{
       if(statFilters.employee && name!==statFilters.employee) return;
       const e=grp.emps[name];
       const a = e.scores.length?avg(e.scores):null;
       tb.appendChild(el(`<tr><td style="padding-left:28px">${esc(name)}</td>
-        <td class="num">${a==null?'<span class="pill n">н/д</span>':`<span class="pill ${a>=90?"g":a>=70?"n":"r"}">${a}</span>`}</td>
+        <td class="num">${a==null?'<span class="pill n">н/д</span>':`<span class="pill ${a>=90?"g":a>=70?"n":"r"}">${fmtScore2(a)}</span>`}</td>
         <td class="num">${e.scores.length}</td>
         <td class="num">${e.crit||"—"}</td></tr>`));
     });
     allScores=allScores.concat(gScores); allCount+=gCount; allCrit+=gCrit;
   });
   if(!statFilters.group){
-    tb.appendChild(el(`<tr class="total-row"><td>Итого</td><td class="num">${allScores.length?avg(allScores):"—"}</td><td class="num">${allCount}</td><td class="num">${allCrit||"—"}</td></tr>`));
+    tb.appendChild(el(`<tr class="total-row"><td>Итого</td><td class="num">${allScores.length?fmtScore2(avg(allScores)):"—"}</td><td class="num">${allCount}</td><td class="num">${allCrit||"—"}</td></tr>`));
   }
   if(!evals.length){ tb.innerHTML=`<tr><td colspan="4" class="empty">Нет оценок за выбранный период</td></tr>`; }
   wrap.appendChild(t);
@@ -941,11 +956,36 @@ function renderMyCalls(){
   const head=el(`<div class="page-head"><h2>Мои звонки</h2><div style="display:flex;gap:10px;align-items:center">${monthSelect(mineAll,myMonth)}<span style="color:var(--muted)">${mine.length} оцен.</span></div></div>`);
   head.querySelector(".month-filter").onchange=e=>{ myMonth=e.target.value; render(); };
   wrap.appendChild(head);
+
+  // сводка сотрудника: средний балл (по фильтру) + разбивка по месяцам
+  const scoreOf = e => e.hasCritical?0:(e.average==null?null:e.average);
+  const scoped = mine.map(scoreOf).filter(x=>x!=null);
+  const overallAvg = scoped.length ? scoped.reduce((a,b)=>a+b,0)/scoped.length : null;
+  const cards=el(`<div class="stat-cards">
+    <div class="stat-card"><div class="v">${overallAvg==null?"—":fmtScore2(overallAvg)}</div><div class="l">Средний балл${myMonth?" за месяц":""}</div></div>
+    <div class="stat-card"><div class="v">${mine.length}</div><div class="l">Оценено звонков</div></div>
+    <div class="stat-card"><div class="v">${mine.filter(e=>e.hasCritical).length||"0"}</div><div class="l">Крит. ошибок</div></div>
+  </div>`);
+  wrap.appendChild(cards);
+
+  if(!myMonth){
+    const byM={};
+    mineAll.forEach(e=>{ const m=(e.callDate||"").slice(0,7); if(m.length!==7) return; const s=scoreOf(e); (byM[m]=byM[m]||[]).push(s==null?null:s); });
+    const monthsSorted=Object.keys(byM).sort().reverse();
+    if(monthsSorted.length>1){
+      const mt=el(`<div class="tbl-wrap" style="margin-bottom:16px"><table><thead><tr><th>Месяц</th><th class="num">Средний балл</th><th class="num">Звонков</th></tr></thead><tbody></tbody></table></div>`);
+      const mtb=mt.querySelector("tbody");
+      monthsSorted.forEach(m=>{ const vals=byM[m].filter(x=>x!=null); const a=vals.length?vals.reduce((x,y)=>x+y,0)/vals.length:null;
+        mtb.appendChild(el(`<tr><td>${monthLabel(m)}</td><td class="num">${a==null?"—":`<span class="pill ${a>=90?"g":a>=70?"n":"r"}">${fmtScore2(a)}</span>`}</td><td class="num">${byM[m].length}</td></tr>`)); });
+      wrap.appendChild(mt);
+    }
+  }
+
   if(!mine.length){ wrap.appendChild(el(`<div class="card empty">${myMonth?"За выбранный месяц оценок нет.":"Пока нет оценённых звонков."}</div>`)); return wrap; }
   const t=el(`<div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Номер</th><th class="num">Средняя</th><th>Оценил</th><th></th></tr></thead><tbody></tbody></table></div>`);
   const tb=t.querySelector("tbody");
   mine.forEach(ev=>{
-    const avg=ev.hasCritical?`<span class="pill r">0 · крит.</span>`:(ev.average==null?`<span class="pill n">—</span>`:`<span class="pill ${ev.average>=90?"g":ev.average>=70?"n":"r"}">${ev.average}</span>`);
+    const avg=ev.hasCritical?`<span class="pill r">0 · крит.</span>`:(ev.average==null?`<span class="pill n">—</span>`:`<span class="pill ${ev.average>=90?"g":ev.average>=70?"n":"r"}">${fmtScore(ev.average)}</span>`);
     const row=el(`<tr><td>${fmtDate(ev.callDate)}</td><td>${esc(ev.phone)||"—"}</td><td class="num">${avg}</td><td>${esc(ev.evaluatedBy)||"—"}</td><td><div class="row-actions"><button class="icon-btn" data-open>Смотреть</button></div></td></tr>`);
     row.querySelector("[data-open]").onclick=()=>{ myCallsOpenEv=ev; render(); };
     tb.appendChild(row);
@@ -956,27 +996,33 @@ function renderMyCalls(){
 function renderEvalReadonly(ev){
   const blank=state.blank, wrap=document.createElement("div");
   wrap.appendChild(el(`<div class="page-head"><h2>Оценка звонка</h2><button class="btn ghost sm" id="ro-back">← Назад</button></div>`));
+  // комментарий контролёра — наверх
+  if(ev.controllerComment) wrap.appendChild(el(`<div class="card" style="border-left:3px solid var(--brand)"><div class="field" style="margin:0"><label>Комментарий контролёра</label><div>${esc(ev.controllerComment)}</div></div></div>`));
   wrap.appendChild(el(`<div class="card"><div class="meta-grid">
     <div class="field"><label>Сотрудник</label><div>${esc(ev.employee)}</div></div>
     <div class="field"><label>Номер</label><div>${esc(ev.phone)||"—"}</div></div>
     <div class="field"><label>Начало разговора</label><div>${fmtDate(ev.callDate)}</div></div>
     <div class="field"><label>Длительность</label><div>${esc(ev.duration)||"—"}</div></div>
   </div></div>`));
-  if(ev.audioUrl){ wrap.appendChild(el(`<div class="card" style="padding:12px"><div class="hint" style="margin-bottom:6px">Запись звонка</div>${audioMarkup(ev.audioUrl)}</div>`)); }
+  const links=[];
+  if(ev.audioUrl) links.push(`<div class="hint" style="margin-bottom:6px">Запись звонка</div>${audioMarkup(ev.audioUrl)}`);
+  if(ev.bitrixUrl) links.push(`<div style="margin-top:${ev.audioUrl?"10px":"0"}"><a class="btn ghost sm" href="${esc(ev.bitrixUrl)}" target="_blank" rel="noopener">🔗 Открыть звонок в Битрикс</a></div>`);
+  if(links.length) wrap.appendChild(el(`<div class="card" style="padding:12px">${links.join("")}</div>`));
   blank.sections.forEach(sec=>{
     const rows=sec.criteria.map(cr=>{
       const v=ev.scores?ev.scores[cr.id]:null;
       const na=(v===undefined||v===null);
       const isCrit=!!(ev.critical&&ev.critical[cr.id]);
+      const lowered=!na && v<100;
       let dots=""; for(let i=0;i<=10;i++){const val=i*10;const on=!na&&v>=val&&v>0;const zero=!na&&v===0&&i===0;dots+=`<div class="dot ${on?"on":""} ${zero?"zero":""}" style="cursor:default"></div>`;}
-      const cmt=(ev.comments&&ev.comments[cr.id])?`<div class="hint" style="color:var(--ink);margin-top:6px">💬 ${esc(ev.comments[cr.id])}</div>`:"";
-      return `<div class="crit ${isCrit?"is-critical":""}"><div><div class="cname">${esc(cr.name)}${isCrit?'<span class="req">⚠ крит.</span>':""}</div>${cmt}</div><div class="score-col"><div class="dots">${dots}</div><span class="sval ${na?"na":""}">${na?"—":v}</span></div></div>`;
+      const comment=(ev.comments&&ev.comments[cr.id])?ev.comments[cr.id]:"";
+      const cmt=comment?`<div class="ro-comment">💬 ${esc(comment)}</div>`:(lowered?`<div class="hint" style="margin-top:6px;color:var(--muted)">— пояснение не указано —</div>`:"");
+      return `<div class="crit ${isCrit?"is-critical":""} ${lowered?"lowered":""}"><div><div class="cname">${esc(cr.name)}${isCrit?'<span class="req">⚠ крит.</span>':""}</div>${cmt}</div><div class="score-col"><div class="dots">${dots}</div><span class="sval ${na?"na":""}">${na?"—":fmtScore(v)}</span></div></div>`;
     }).join("");
     wrap.appendChild(el(`<div class="section"><div class="section-bar"><span class="t">${esc(sec.title)}</span></div><div class="crit-list">${rows}</div></div>`));
   });
   const {sum,average,hasCritical}=computeScore(ev,blank);
-  wrap.appendChild(el(`<div class="totals"><div class="tot"><span>Средняя оценка</span><b class="avg">${average==null?"—":average}</b></div><div class="tot"><span>Сумма</span><b>${sum}</b></div>${hasCritical?'<div class="crit-warn">⚠ Критическая ошибка — итог обнулён</div>':""}<div class="spacer"></div></div>`));
-  if(ev.controllerComment) wrap.appendChild(el(`<div class="card"><div class="field" style="margin:0"><label>Комментарий контролёра</label><div>${esc(ev.controllerComment)}</div></div></div>`));
+  wrap.appendChild(el(`<div class="totals"><div class="tot"><span>Средняя оценка</span><b class="avg">${fmtScore(average)}</b></div><div class="tot"><span>Сумма</span><b>${sum}</b></div>${hasCritical?'<div class="crit-warn">⚠ Критическая ошибка — итог обнулён</div>':""}<div class="spacer"></div></div>`));
   wrap.querySelector("#ro-back").onclick=()=>{ myCallsOpenEv=null; render(); };
   return wrap;
 }
