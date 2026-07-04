@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Оценка звонков — Робокасса</title>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<style>
+  :root{
+    --brand:#525FFB; --brand-d:#3e4bd6; --brand-l:#eceefe;
+    --ink:#1c2233; --muted:#6b7280; --line:#e6e8ef; --bg:#f4f5f9;
+    --bar:#eef0f4; --ok:#16a34a; --warn:#dc2626; --warn-l:#fdecec;
+    --dot-off:#e3e6f0; --dot-on:#525FFB;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Arial,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);background:var(--bg);font-size:14px;line-height:1.45}
+  a{color:var(--brand);text-decoration:none}
+  button{font-family:inherit;font-size:14px;cursor:pointer;border:none;border-radius:8px}
+  input,select,textarea{font-family:inherit;font-size:14px;border:1px solid var(--line);border-radius:8px;padding:9px 11px;background:#fff;color:var(--ink);width:100%}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--brand)}
+  .hidden{display:none!important}
+
+  /* login */
+  #login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+  .login-card{background:#fff;border-radius:16px;padding:34px 30px;max-width:380px;width:100%;box-shadow:0 12px 40px rgba(30,40,90,.10)}
+  .login-card h1{font-size:20px;margin:0 0 4px}
+  .login-card p{color:var(--muted);margin:0 0 22px;font-size:13px}
+  .brandmark{width:40px;height:40px;border-radius:10px;background:var(--brand);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;margin-bottom:16px}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+  .btn{background:var(--brand);color:#fff;padding:11px 16px;font-weight:600}
+  .btn:hover{background:var(--brand-d)}
+  .btn.wide{width:100%}
+  .btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+  .btn.ghost:hover{background:var(--bar)}
+  .btn.sm{padding:7px 12px;font-size:13px}
+  .btn.danger{background:var(--warn-l);color:var(--warn)}
+  .err{color:var(--warn);font-size:13px;margin-top:8px;min-height:16px}
+
+  /* app shell */
+  header.top{background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+  .top-inner{max-width:1180px;margin:0 auto;display:flex;align-items:center;gap:18px;padding:0 20px;height:58px}
+  .logo{display:flex;align-items:center;gap:10px;font-weight:700}
+  .logo .brandmark{width:30px;height:30px;font-size:14px;margin:0}
+  nav.tabs{display:flex;gap:2px;margin-left:8px;flex:1;flex-wrap:wrap}
+  nav.tabs button{background:none;color:var(--muted);padding:9px 13px;border-radius:8px;font-weight:600}
+  nav.tabs button:hover{background:var(--bar);color:var(--ink)}
+  nav.tabs button.active{background:var(--brand-l);color:var(--brand)}
+  .who{color:var(--muted);font-size:13px;display:flex;align-items:center;gap:10px}
+  .who b{color:var(--ink);font-weight:600}
+  main{max-width:1180px;margin:0 auto;padding:22px 20px 60px}
+  .demo-banner{background:#fff7e6;border:1px solid #ffe2a8;color:#8a5b00;padding:9px 14px;border-radius:10px;font-size:13px;margin-bottom:16px}
+
+  .page-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+  .page-head h2{margin:0;font-size:19px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+  .meta-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+  .meta-grid .field label{font-weight:600;color:var(--ink)}
+
+  /* section */
+  .section{border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:12px;background:#fff}
+  .section-bar{background:var(--bar);padding:11px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
+  .section-bar .t{font-weight:700}
+  .section-bar .count{color:var(--muted);font-weight:600;font-size:13px}
+  .section-bar .chev{margin-left:auto;color:var(--muted);transition:transform .15s}
+  .section.collapsed .chev{transform:rotate(-90deg)}
+  .section.collapsed .crit-list{display:none}
+  .crit{padding:13px 16px;border-top:1px solid var(--line);display:grid;grid-template-columns:minmax(220px,1.3fr) auto;gap:10px 18px;align-items:start}
+  .crit:first-child{border-top:none}
+  .crit .cname{font-weight:600;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .req{color:var(--warn)}
+  .wbadge{background:var(--bar);color:var(--muted);border-radius:5px;padding:1px 6px;font-size:11px;font-weight:700}
+  .hint{color:var(--muted);font-size:12.5px;margin-top:4px}
+  .qmark{width:15px;height:15px;border-radius:50%;border:1px solid var(--muted);color:var(--muted);font-size:10px;display:inline-flex;align-items:center;justify-content:center;cursor:help}
+  .score-col{display:flex;flex-direction:column;gap:7px;align-items:flex-end;min-width:280px}
+  .dots{display:flex;align-items:center;gap:4px}
+  .dot{width:20px;height:20px;border-radius:50%;background:var(--dot-off);cursor:pointer;transition:transform .08s}
+  .dot:hover{transform:scale(1.15)}
+  .dot.on{background:var(--dot-on)}
+  .dot.zero{border:2px solid var(--dot-on);background:#fff;box-sizing:border-box}
+  .sval{font-weight:700;min-width:34px;text-align:right}
+  .sval.na{color:var(--muted);font-weight:400}
+  .score-actions{display:flex;gap:12px;align-items:center;font-size:12.5px}
+  .clear-link{color:var(--muted);cursor:pointer}
+  .clear-link:hover{color:var(--brand)}
+  .crit-toggle{display:inline-flex;align-items:center;gap:5px;cursor:pointer;color:var(--muted)}
+  .crit-toggle.on{color:var(--warn);font-weight:600}
+  .crit-toggle input{width:auto;margin:0}
+  .cmt-link{color:var(--brand);cursor:pointer}
+  .crit textarea{grid-column:1/-1;margin-top:4px;min-height:52px;resize:vertical}
+  .crit.is-critical{background:var(--warn-l)}
+
+  /* totals */
+  .totals{position:sticky;bottom:0;background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 18px;display:flex;align-items:center;gap:26px;flex-wrap:wrap;box-shadow:0 -6px 20px rgba(30,40,90,.06);margin-top:6px}
+  .tot b{font-size:22px}
+  .tot span{color:var(--muted);font-size:12px;display:block}
+  .tot .avg{color:var(--brand)}
+  .tot .crit{color:var(--warn)}
+  .totals .spacer{flex:1}
+  .crit-warn{background:var(--warn-l);color:var(--warn);border-radius:8px;padding:6px 12px;font-weight:600;font-size:13px}
+
+  /* tables */
+  table{width:100%;border-collapse:collapse;background:#fff}
+  .tbl-wrap{border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);font-size:13.5px}
+  th{background:var(--bar);color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.02em}
+  tr:last-child td{border-bottom:none}
+  td.num,th.num{text-align:right}
+  .grp-row td{background:#fbfbfe;font-weight:700}
+  .total-row td{background:var(--brand-l);font-weight:700}
+  .pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:12px;font-weight:700}
+  .pill.g{background:#e7f7ee;color:var(--ok)}
+  .pill.r{background:var(--warn-l);color:var(--warn)}
+  .pill.n{background:var(--bar);color:var(--muted)}
+  .row-actions{display:flex;gap:6px;justify-content:flex-end}
+  .icon-btn{background:var(--bar);color:var(--muted);border-radius:7px;padding:5px 9px;font-size:12px}
+  .icon-btn:hover{background:var(--brand-l);color:var(--brand)}
+  .icon-btn.del:hover{background:var(--warn-l);color:var(--warn)}
+  .filters{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px}
+  .filters .field{margin:0;min-width:150px}
+  .filters .field label{font-size:11px}
+  .empty{text-align:center;color:var(--muted);padding:44px 20px}
+  audio{width:100%;margin-top:8px;height:38px}
+  .link-btn{display:inline-block;margin-top:8px}
+
+  /* blank editor */
+  .ed-section{border:1px solid var(--line);border-radius:12px;margin-bottom:14px;overflow:hidden}
+  .ed-section-head{background:var(--bar);padding:10px 14px;display:flex;gap:8px;align-items:center}
+  .ed-section-head input{font-weight:700;background:transparent;border-color:transparent}
+  .ed-section-head input:focus{background:#fff;border-color:var(--brand)}
+  .ed-crit{display:grid;grid-template-columns:1.2fr 2fr 90px 110px auto;gap:8px;padding:10px 14px;border-top:1px solid var(--line);align-items:start}
+  .ed-crit textarea{min-height:38px;resize:vertical}
+  .ed-checks{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+  .ed-checks label{display:flex;gap:5px;align-items:center;cursor:pointer}
+  .ed-checks input{width:auto;margin:0}
+  .mini{padding:4px 8px;font-size:12px}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .settings-block{margin-bottom:22px}
+  .settings-block h3{font-size:15px;margin:0 0 10px}
+  .roster-row{display:grid;grid-template-columns:1.3fr 1fr auto auto;gap:8px;align-items:center;margin-bottom:8px}
+  .roster-row .ctl{display:flex;gap:5px;align-items:center;color:var(--muted);font-size:12.5px}
+  .roster-row .ctl input{width:auto}
+  .save-toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;opacity:0;transition:opacity .2s;z-index:60}
+  .save-toast.show{opacity:1}
+  @media(max-width:720px){
+    .crit{grid-template-columns:1fr}
+    .score-col{align-items:flex-start;min-width:0}
+    .ed-crit{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== LOGIN ===== -->
+<div id="login">
+  <div class="login-card">
+    <div class="brandmark">Р</div>
+    <h1>Оценка звонков</h1>
+    <p>Контроль качества · отдел продаж Робокасса</p>
+    <div class="field">
+      <label>Сотрудник</label>
+      <select id="loginWho"></select>
+    </div>
+    <div class="field">
+      <label>Пароль доступа</label>
+      <input type="password" id="loginPass" placeholder="••••••••" autocomplete="off">
+    </div>
+    <button class="btn wide" id="loginBtn">Войти</button>
+    <div class="err" id="loginErr"></div>
+  </div>
+</div>
+
+<!-- ===== APP ===== -->
+<div id="app" class="hidden">
+  <header class="top">
+    <div class="top-inner">
+      <div class="logo"><span class="brandmark">Р</span> Оценка звонков</div>
+      <nav class="tabs" id="tabs">
+        <button data-tab="evaluate" class="active">Оценить звонок</button>
+        <button data-tab="list">Оценки</button>
+        <button data-tab="stats">Сводная статистика</button>
+        <button data-tab="blank">Бланк</button>
+        <button data-tab="settings">Настройки</button>
+      </nav>
+      <div class="who"><span><span id="whoLabel">Оценивает: </span><b id="whoName">—</b></span> <button class="btn ghost sm" id="logoutBtn">Выйти</button></div>
+    </div>
+  </header>
+  <main>
+    <div id="demoBanner" class="demo-banner hidden">Демо-режим: Firebase не подключён — данные не сохраняются между сессиями. Вставьте конфиг в начале файла, чтобы включить сохранение.</div>
+    <div id="view"></div>
+  </main>
+</div>
+
+<div class="save-toast" id="toast"></div>
+
+<script>
+/* ============================================================
+   1. КОНФИГ — вставьте сюда данные вашего проекта Firebase.
+   Пока стоит заглушка — приложение работает в демо-режиме.
+   ============================================================ */
+const firebaseConfig = {
+  apiKey: "AIzaSyBTvMQCh5TWMcDUZVWrpn-_-YmAIjVwKIQ",
+  authDomain: "rk-quality-2026.firebaseapp.com",
+  projectId: "rk-quality-2026",
+  storageBucket: "rk-quality-2026.firebasestorage.app",
+  messagingSenderId: "290555234768",
+  appId: "1:290555234768:web:888d9407c096db2ab611d5",
+  measurementId: "G-FHW4TL66XC"
+};
+
+// SHA-256 пароля по умолчанию = "robokassa2026". Меняется в разделе «Настройки».
+const DEFAULT_PASS_HASH = "c57b1a7894c8ce57d38b0840caa4d5bbd5b75f54da13d1b8053bf60ea8510be5";
+
+/* ---------- стартовый бланк ТЛМ-2026 ---------- */
+const DEFAULT_BLANK = {
+  id: "tlm-2026",
+  name: "Бланк оценки ТЛМ - 2026",
+  sections: [
+    {title:"Установление контакта", criteria:[
+      {id:"c01", name:"Установлен контакт", weight:1, required:true, hint:"Поприветствовал согласно стандартам компании, уточнил имя и уместность звонка. Привлечение внимания, знакомство и проявление высоких коммуникативных навыков."},
+      {id:"c02", name:"Подготовился к звонку", weight:1, required:true, hint:"Перед контактом менеджер проанализировал данные о клиенте (сайт, вид деятельности, форма собственности), проверил историю взаимодействий и комментарии в CRM."},
+    ]},
+    {title:"Навыки общения", criteria:[
+      {id:"c03", name:"Стиль ведения разговора", weight:1, required:true, hint:"Проявляет положительные эмоции, доброжелательность, грамотно и чётко говорит, хорошо владеет голосом, не допускает монотонности."},
+      {id:"c04", name:"Процесс ведения диалога", weight:1, required:true, hint:"Слушает внимательно вопрос, подстраивается под уровень знаний клиента, сотрудник сам управляет диалогом."},
+      {id:"c05", name:"Позиционирование компании", weight:1, required:false, hint:"Корректно представляет сервис Робокасса, формирует у клиента понимание надёжности и компетентности компании."},
+    ]},
+    {title:"Квалификация", criteria:[
+      {id:"c06", name:"Выявлена форма собственности", weight:1, required:false, hint:"Уточнил форму работы клиента (ИП / ЮЛ / Самозанятый / покупатель, физик)."},
+      {id:"c07", name:"Выявлена модель бизнеса клиента", weight:1, required:false, hint:"Уточнил, что продаёт клиент (товары / услуги / инфопродукты) и каким способом планирует принимать оплату (сайт / ссылки / счета)."},
+    ]},
+    {title:"Выявление потребностей", criteria:[
+      {id:"c08", name:"Выявил потребности", weight:1, required:true, hint:"Использовал открытые вопросы, задавал уточняющие вопросы по специфике бизнеса, выявление скрытых болей клиента, его целей."},
+      {id:"c09", name:"Выявлена потребность в фискализации", weight:1, required:false, hint:"Уточнил, как клиент планирует фискализировать оплаты, наличие онлайн-кассы; при непонимании сориентировал о необходимости фискализации в рамках 54-ФЗ. Определил необходимость Robokassa Online / Робочеки."},
+      {id:"c10", name:"Использует резюмирование", weight:1, required:false, hint:"Подтвердил и резюмировал потребности клиента."},
+    ]},
+    {title:"Презентация", criteria:[
+      {id:"c11", name:"Презентация проведена", weight:1, required:false, hint:"Адаптирует предложение и коммуникацию под потребности и интересы клиента. Отказ от полной презентации при отсутствии запроса на конкретный функционал."},
+      {id:"c12", name:"Знает продукт / свойства / особенности", weight:1, required:true, hint:"Корректно предоставляет информацию о продуктах / тарифах / работе сервиса и т.п."},
+      {id:"c13", name:"Незнание продукта может привести к потере клиента", weight:1, required:false, hint:"Незнание продукта может привести к потере клиента или к потере клиента и конфликту."},
+    ]},
+    {title:"Работа с возражениями", criteria:[
+      {id:"c14", name:"Работа с возражениями", weight:1, required:false, hint:"Уточняет информацию, аргументирует позицию, вовлекает клиента в процесс, отрабатывает возражения. Все возражения отработаны в процессе диалога."},
+    ]},
+    {title:"Решение вопроса в одном звонке", criteria:[
+      {id:"c15", name:"Проактивная консультация, учтены потенциальные риски для клиента", weight:1, required:false, hint:"Учёт рисков клиента на этапе консультации (ограничения функционала при использовании Instagram/Telegram как основной площадки, Робочеки на АУСН) с предложением решений без давления."},
+    ]},
+    {title:"Завершение разговора", criteria:[
+      {id:"c16", name:"Проговорил последующие шаги / договорённости", weight:1, required:true, hint:"Зафиксировал результат и договорённости, проговорил их с клиентом, зафиксировал повторный контакт. CRM (полная информация + задача)."},
+    ]},
+    {title:"Продано \\ Упущено", criteria:[
+      {id:"c17", name:"Продал!!!", weight:1.5, required:false, hint:"Оценивается экспертно по впечатлению от звонка и усилий сотрудника, а также по «согласию» клиента и дальнейшему движению по воронке, на основе хронологии."},
+      {id:"c18", name:"Кросс-продажа", weight:1.5, required:false, hint:"Продал дополнительный функционал сервиса (RK Online / Робомаркет / РКО ПСБ). Отметка об успешной продаже есть в CRM."},
+      {id:"c19", name:"Получил устную благодарность \\ Претензию", weight:1.5, required:false, hint:"Объективная благодарность, а не просто «спасибо» в рамках звонка: отзыв на сайтах / на почту / письмо с благодарностью и т.д."},
+    ]},
+    {title:"Работа с лидом в CRM", criteria:[
+      {id:"c20", name:'Комментарий «Основная информация» в Мерчанте', weight:1, required:true, hint:"Сотрудник корректно добавил комментарий в «Основная информация» в мерчанте."},
+      {id:"c21", name:"Полнота заполнения информации", weight:1, required:true, hint:"Все договорённости / информация о потребностях, резюме звонка отражены в хронологии."},
+      {id:"c22", name:"Договорённости с клиентом", weight:1, required:true, hint:"Задачи по мерчанту не просрочены, договорённости выполнены (отправка доп. информации и т.д.)."},
+    ]},
+  ]
+};
+
+const DEFAULT_ROSTER = [
+  {name:"Салибекян Степан", group:"Телемаркетинг", controller:true},
+  {name:"Прасолова Алина", group:"Телемаркетинг", controller:true},
+  {name:"Морозов Алексей", group:"Телемаркетинг", controller:true},
+  {name:"Абилькилямова Арина", group:"Телемаркетинг", controller:true},
+  {name:"Микерина Ксения", group:"Телемаркетинг", controller:true},
+  {name:"Певнева Юлия", group:"Телемаркетинг", controller:false},
+  {name:"Колобова Юлия", group:"Телемаркетинг", controller:false},
+  {name:"Судобин Даниэль", group:"Телемаркетинг", controller:false},
+  {name:"Волина Вера", group:"Телемаркетинг", controller:false},
+  {name:"Ризванов Ильназ", group:"Телемаркетинг", controller:false},
+];
+
+/* ============================================================
+   2. ХРАНИЛИЩЕ — Firestore или память (демо)
+   ============================================================ */
+const USE_FIREBASE = !firebaseConfig.apiKey.startsWith("PASTE");
+let db = null;
+
+const Store = {
+  async init(){
+    if(USE_FIREBASE){
+      try{
+        firebase.initializeApp(firebaseConfig);
+        db = firebase.firestore();
+        this.backend = "firebase";
+      }catch(e){ console.error(e); this.backend="memory"; }
+    } else { this.backend = "memory"; }
+
+    if(this.backend==="memory") this._seedMemory();
+
+    // конфиг
+    let cfg = await this.getConfig();
+    if(!cfg){ cfg = {roster:DEFAULT_ROSTER, accessPassHash:DEFAULT_PASS_HASH}; await this.saveConfig(cfg); }
+    if(!cfg.accessPassHash) cfg.accessPassHash = DEFAULT_PASS_HASH;
+    if(!cfg.roster) cfg.roster = DEFAULT_ROSTER;
+    state.config = cfg;
+    // бланк
+    let blank = await this.getBlank();
+    if(!blank){ blank = JSON.parse(JSON.stringify(DEFAULT_BLANK)); await this.saveBlank(blank); }
+    state.blank = blank;
+  },
+  _mem:{config:null, blank:null, evals:[]},
+  _seedMemory(){
+    this._mem.config = {roster:JSON.parse(JSON.stringify(DEFAULT_ROSTER)), accessPassHash:DEFAULT_PASS_HASH};
+    this._mem.blank = JSON.parse(JSON.stringify(DEFAULT_BLANK));
+    // пара демо-оценок для наглядности статистики
+    const mk=(emp,vals,phone,date,crit)=>{const s={},c={};Object.keys(vals).forEach(k=>s[k]=vals[k]);return {id:"demo_"+Math.random().toString(36).slice(2,8),employee:emp,group:"Телемаркетинг",phone:phone,callDate:date,duration:"08:30",audioUrl:"",blankName:DEFAULT_BLANK.name,scores:s,comments:c,critical:crit||{},controllerComment:"",evaluatedBy:"Салибекян Степан",createdAt:date};};
+    const full={c01:100,c02:100,c03:100,c04:100,c08:100,c12:100,c16:80,c20:100,c21:100,c22:100};
+    this._mem.evals = [
+      mk("Волина Вера", full, "79137340273","2026-06-18T11:09:56"),
+      mk("Колобова Юлия", {c01:100,c02:80,c03:100,c04:90,c08:80,c12:100,c16:100,c20:100,c21:80,c22:100}, "79001112233","2026-06-19T14:20:00"),
+      mk("Судобин Даниэль", {c01:100,c02:100,c03:60,c04:70,c08:100,c12:80,c16:100,c20:100,c21:100,c22:100}, "79004445566","2026-06-20T09:05:00"),
+    ];
+  },
+  async getConfig(){
+    if(this.backend==="memory") return this._mem.config;
+    const d = await db.collection("qm_config").doc("main").get();
+    return d.exists ? d.data() : null;
+  },
+  async saveConfig(cfg){
+    if(this.backend==="memory"){ this._mem.config=cfg; return; }
+    await db.collection("qm_config").doc("main").set(cfg);
+  },
+  async getBlank(){
+    if(this.backend==="memory") return this._mem.blank;
+    const d = await db.collection("qm_config").doc("blank").get();
+    return d.exists ? d.data() : null;
+  },
+  async saveBlank(blank){
+    if(this.backend==="memory"){ this._mem.blank=blank; return; }
+    await db.collection("qm_config").doc("blank").set(blank);
+  },
+  async listEvaluations(){
+    if(this.backend==="memory") return [...this._mem.evals];
+    const q = await db.collection("qm_evaluations").orderBy("callDate","desc").get();
+    return q.docs.map(d=>({id:d.id,...d.data()}));
+  },
+  async saveEvaluation(ev){
+    if(this.backend==="memory"){
+      if(ev.id){ const i=this._mem.evals.findIndex(e=>e.id===ev.id); if(i>=0)this._mem.evals[i]=ev; else this._mem.evals.unshift(ev); }
+      else { ev.id="ev_"+Math.random().toString(36).slice(2,10); this._mem.evals.unshift(ev); }
+      return ev.id;
+    }
+    if(ev.id){ const id=ev.id; const cp={...ev}; delete cp.id; await db.collection("qm_evaluations").doc(id).set(cp); return id; }
+    const ref = await db.collection("qm_evaluations").add(ev); return ref.id;
+  },
+  async deleteEvaluation(id){
+    if(this.backend==="memory"){ this._mem.evals=this._mem.evals.filter(e=>e.id!==id); return; }
+    await db.collection("qm_evaluations").doc(id).delete();
+  }
+};
+
+/* ============================================================
+   3. СОСТОЯНИЕ + УТИЛИТЫ
+   ============================================================ */
+const state = { config:null, blank:null, controller:null, currentUser:null, role:null, tab:"evaluate", current:null, evals:null, editingBlank:null };
+
+async function sha256(str){
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+const esc = s => (s==null?"":String(s)).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+const $ = sel => document.querySelector(sel);
+function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),1800); }
+function fmtDate(iso){ if(!iso) return "—"; const d=new Date(iso); if(isNaN(d)) return iso; return d.toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"}); }
+function allCriteria(blank){ const out=[]; blank.sections.forEach(s=>s.criteria.forEach(c=>out.push(c))); return out; }
+
+function computeScore(ev, blank){
+  let sum=0, wsum=0, filled=0, hasCritical=false;
+  blank.sections.forEach(sec=>sec.criteria.forEach(c=>{
+    if(ev.critical && ev.critical[c.id]) hasCritical=true;
+    const v = ev.scores ? ev.scores[c.id] : null;
+    if(v===null||v===undefined) return;
+    filled++; const w=c.weight||1; sum+=v*w; wsum+=w;
+  }));
+  const raw = wsum>0 ? sum/wsum : null;
+  const average = hasCritical ? 0 : (raw===null?null:Math.round(raw));
+  return {sum:Math.round(sum), average, filled, hasCritical};
+}
+
+/* ============================================================
+   4. LOGIN
+   ============================================================ */
+function fillLoginControllers(){
+  const sel = $("#loginWho");
+  sel.innerHTML = state.config.roster.map(c=>`<option value="${esc(c.name)}">${esc(c.name)}${c.controller?" (контролёр)":""}</option>`).join("");
+}
+$("#loginBtn").onclick = async ()=>{
+  const name = $("#loginWho").value;
+  const user = state.config.roster.find(r=>r.name===name);
+  const hash = await sha256($("#loginPass").value);
+  const expected = (user && user.passHash) ? user.passHash : (state.config.accessPassHash||DEFAULT_PASS_HASH);
+  if(hash === expected){
+    state.currentUser = user; state.controller = name;
+    state.role = (user && user.controller) ? "controller" : "employee";
+    $("#login").classList.add("hidden");
+    $("#app").classList.remove("hidden");
+    $("#whoLabel").textContent = state.role==="controller" ? "Оценивает: " : "Вход: ";
+    $("#whoName").textContent = name;
+    if(Store.backend==="memory") $("#demoBanner").classList.remove("hidden");
+    if(state.role==="employee"){ document.querySelector("nav.tabs").style.display="none"; state.tab="mycalls"; }
+    render();
+  } else {
+    $("#loginErr").textContent = "Неверный пароль";
+  }
+};
+$("#loginPass").addEventListener("keydown",e=>{ if(e.key==="Enter") $("#loginBtn").click(); });
+$("#logoutBtn").onclick = ()=>{ location.reload(); };
+
+/* ============================================================
+   5. ROUTER / TABS
+   ============================================================ */
+$("#tabs").addEventListener("click", e=>{
+  const b = e.target.closest("button[data-tab]"); if(!b) return;
+  state.tab = b.dataset.tab;
+  if(state.tab==="evaluate" && !state.current) newEvaluation();
+  render();
+});
+function setActiveTab(){
+  document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("active", b.dataset.tab===state.tab));
+}
+async function render(){
+  if(state.role==="employee") state.tab="mycalls";
+  setActiveTab();
+  const v = $("#view");
+  if(state.tab==="evaluate"){ if(!state.current) newEvaluation(); v.innerHTML=""; v.appendChild(renderEvaluate()); }
+  else if(state.tab==="list"){ v.innerHTML='<div class="empty">Загрузка…</div>'; state.evals = await Store.listEvaluations(); v.innerHTML=""; v.appendChild(renderList()); }
+  else if(state.tab==="stats"){ v.innerHTML='<div class="empty">Загрузка…</div>'; state.evals = await Store.listEvaluations(); v.innerHTML=""; v.appendChild(renderStats()); }
+  else if(state.tab==="blank"){ v.innerHTML=""; v.appendChild(renderBlankEditor()); }
+  else if(state.tab==="settings"){ v.innerHTML=""; v.appendChild(renderSettings()); }
+  else if(state.tab==="mycalls"){ v.innerHTML='<div class="empty">Загрузка…</div>'; state.evals=await Store.listEvaluations(); v.innerHTML=""; v.appendChild(renderMyCalls()); }
+}
+
+/* ============================================================
+   6. ВКЛАДКА «ОЦЕНИТЬ ЗВОНОК»
+   ============================================================ */
+function newEvaluation(){
+  state.current = { id:null, employee:"", group:"", phone:"", callDate:"", duration:"", audioUrl:"",
+    blankName:state.blank.name, scores:{}, comments:{}, critical:{}, controllerComment:"",
+    evaluatedBy:state.controller, createdAt:null, _openComments:{} };
+}
+function el(html){ const t=document.createElement("template"); t.innerHTML=html.trim(); return t.content.firstElementChild; }
+
+function renderEvaluate(){
+  const c = state.current, blank = state.blank;
+  const wrap = document.createElement("div");
+  const isEdit = !!c.id;
+  const emps = state.config.roster;
+
+  wrap.appendChild(el(`
+    <div class="page-head">
+      <h2>${isEdit?"Редактирование оценки":"Новая оценка звонка"}</h2>
+      <div style="display:flex;gap:8px">
+        <button class="btn ghost sm" id="ev-cancel">Отмена</button>
+        <button class="btn sm" id="ev-save">Сохранить оценку</button>
+      </div>
+    </div>`));
+
+  // мета
+  const meta = el(`<div class="card"><div class="meta-grid"></div></div>`);
+  const mg = meta.querySelector(".meta-grid");
+  const empOpts = `<option value="">— выберите —</option>` + emps.map(e=>`<option ${e.name===c.employee?"selected":""}>${esc(e.name)}</option>`).join("");
+  mg.appendChild(el(`<div class="field"><label>Сотрудник</label><select id="ev-emp">${empOpts}</select></div>`));
+  mg.appendChild(el(`<div class="field"><label>Кому звонил (номер)</label><input id="ev-phone" value="${esc(c.phone)}" placeholder="79000000000"></div>`));
+  mg.appendChild(el(`<div class="field"><label>Начало разговора</label><input type="datetime-local" id="ev-date" value="${esc(c.callDate)}"></div>`));
+  mg.appendChild(el(`<div class="field"><label>Длительность</label><input id="ev-dur" value="${esc(c.duration)}" placeholder="08:30"></div>`));
+  mg.appendChild(el(`<div class="field" style="grid-column:1/-1"><label>Ссылка на запись (UIS / Битрикс / mp3)</label><input id="ev-audio" value="${esc(c.audioUrl)}" placeholder="https://…"></div>`));
+  wrap.appendChild(meta);
+
+  // аудио превью
+  const audioBox = el(`<div id="ev-audiobox"></div>`);
+  wrap.appendChild(audioBox);
+  const renderAudio=()=>{ audioBox.innerHTML=""; const u=c.audioUrl.trim(); if(!u) return;
+    if(/\.(mp3|wav|ogg|m4a)(\?|$)/i.test(u)) audioBox.appendChild(el(`<div class="card" style="padding:12px"><audio controls src="${esc(u)}"></audio></div>`));
+    else audioBox.appendChild(el(`<div class="card" style="padding:12px"><a class="btn ghost sm link-btn" href="${esc(u)}" target="_blank" rel="noopener">▶ Открыть запись в новой вкладке</a></div>`)); };
+  renderAudio();
+
+  // секции бланка
+  const sectionsBox = document.createElement("div");
+  blank.sections.forEach((sec,si)=>sectionsBox.appendChild(renderEvalSection(sec,si)));
+  wrap.appendChild(sectionsBox);
+
+  // комментарий контролёра
+  wrap.appendChild(el(`<div class="card"><div class="field" style="margin:0"><label>Общий комментарий контролёра</label><textarea id="ev-comment" style="min-height:70px">${esc(c.controllerComment)}</textarea></div></div>`));
+
+  // итоги
+  wrap.appendChild(renderTotals());
+
+  // handlers
+  wrap.querySelector("#ev-emp").onchange = e=>{ c.employee=e.target.value; const r=emps.find(x=>x.name===c.employee); c.group=r?r.group:""; };
+  wrap.querySelector("#ev-phone").oninput = e=>c.phone=e.target.value;
+  wrap.querySelector("#ev-date").oninput = e=>c.callDate=e.target.value;
+  wrap.querySelector("#ev-dur").oninput = e=>c.duration=e.target.value;
+  const au=wrap.querySelector("#ev-audio"); au.oninput=e=>c.audioUrl=e.target.value; au.onchange=renderAudio;
+  wrap.querySelector("#ev-comment").oninput = e=>c.controllerComment=e.target.value;
+  wrap.querySelector("#ev-cancel").onclick = ()=>{ newEvaluation(); render(); };
+  wrap.querySelector("#ev-save").onclick = saveCurrentEvaluation;
+  return wrap;
+}
+
+function renderEvalSection(sec, si){
+  const c = state.current;
+  const total = sec.criteria.length;
+  const filled = sec.criteria.filter(cr=>c.scores[cr.id]!==undefined && c.scores[cr.id]!==null).length;
+  const sectionEl = el(`<div class="section">
+    <div class="section-bar"><span class="t">${esc(sec.title)}</span><span class="count">(${filled}/${total})</span><span class="chev">▾</span></div>
+    <div class="crit-list"></div>
+  </div>`);
+  sectionEl.querySelector(".section-bar").onclick = ()=>sectionEl.classList.toggle("collapsed");
+  const list = sectionEl.querySelector(".crit-list");
+  sec.criteria.forEach(cr=>list.appendChild(renderCriterion(cr)));
+  return sectionEl;
+}
+
+function renderCriterion(cr){
+  const c = state.current;
+  const val = c.scores[cr.id];
+  const isNA = (val===undefined||val===null);
+  const isCrit = !!(c.critical && c.critical[cr.id]);
+  const openC = !!c._openComments[cr.id] || !!(c.comments[cr.id]);
+  const row = el(`<div class="crit ${isCrit?"is-critical":""}">
+    <div>
+      <div class="cname">${esc(cr.name)}${cr.required?'<span class="req">*</span>':""}${cr.weight&&cr.weight!==1?`<span class="wbadge">x${cr.weight}</span>`:'<span class="wbadge">x1</span>'}<span class="qmark" title="${esc(cr.hint)}">?</span></div>
+      <div class="hint">${esc(cr.hint)}</div>
+    </div>
+    <div class="score-col">
+      <div class="dots"></div>
+      <div class="score-actions">
+        <span class="sval ${isNA?"na":""}">${isNA?"—":val}</span>
+        <span class="clear-link">Очистить</span>
+        <label class="crit-toggle ${isCrit?"on":""}"><input type="checkbox" ${isCrit?"checked":""}> ⚠ Крит. ошибка</label>
+        <span class="cmt-link">${openC?"Комментарий":"+ Комментарий"}</span>
+      </div>
+    </div>
+  </div>`);
+  // dots
+  const dotsBox = row.querySelector(".dots");
+  for(let i=0;i<=10;i++){
+    const v=i*10;
+    const on = !isNA && val>=v && val>0;
+    const zero = !isNA && val===0 && i===0;
+    const d = el(`<div class="dot ${on?"on":""} ${zero?"zero":""}" title="${v}"></div>`);
+    d.onclick = ()=>{ c.scores[cr.id]=v; delete c._justCleared; render(); };
+    dotsBox.appendChild(d);
+  }
+  row.querySelector(".clear-link").onclick = ()=>{ delete c.scores[cr.id]; render(); };
+  row.querySelector(".crit-toggle input").onchange = e=>{ if(!c.critical)c.critical={}; if(e.target.checked)c.critical[cr.id]=true; else delete c.critical[cr.id]; render(); };
+  const cmtLink = row.querySelector(".cmt-link");
+  cmtLink.onclick = ()=>{ c._openComments[cr.id]=!c._openComments[cr.id]; render(); };
+  if(openC){
+    const ta = el(`<textarea placeholder="Комментарий к критерию">${esc(c.comments[cr.id]||"")}</textarea>`);
+    ta.oninput = e=>c.comments[cr.id]=e.target.value;
+    row.appendChild(ta);
+  }
+  return row;
+}
+
+function renderTotals(){
+  const c=state.current;
+  const {sum, average, filled, hasCritical} = computeScore(c, state.blank);
+  const box = el(`<div class="totals">
+    <div class="tot"><span>Средняя оценка</span><b class="avg">${average===null?"—":average}</b></div>
+    <div class="tot"><span>Сумма оценок</span><b>${sum}</b></div>
+    <div class="tot"><span>Заполнено критериев</span><b>${filled}</b></div>
+    <div class="spacer"></div>
+    ${hasCritical?'<div class="crit-warn">⚠ Критическая ошибка — итог обнулён</div>':""}
+    <button class="btn" id="ev-save2">Сохранить оценку</button>
+  </div>`);
+  box.querySelector("#ev-save2").onclick = saveCurrentEvaluation;
+  return box;
+}
+
+async function saveCurrentEvaluation(){
+  const c = state.current, blank = state.blank;
+  if(!c.employee){ toast("Выберите сотрудника"); return; }
+  // проверка обязательных
+  const missing = allCriteria(blank).filter(cr=>cr.required && (c.scores[cr.id]===undefined||c.scores[cr.id]===null));
+  if(missing.length && !c._forceSave){
+    if(!confirm(`Не заполнены обязательные критерии (${missing.length}): ${missing.map(m=>m.name).slice(0,4).join(", ")}${missing.length>4?"…":""}.\nСохранить всё равно?`)) return;
+  }
+  const {sum, average, hasCritical} = computeScore(c, blank);
+  const rec = {
+    id:c.id, employee:c.employee, group:c.group||"", phone:c.phone||"", callDate:c.callDate||new Date().toISOString().slice(0,16),
+    duration:c.duration||"", audioUrl:c.audioUrl||"", blankName:blank.name,
+    scores:c.scores, comments:c.comments, critical:c.critical||{}, controllerComment:c.controllerComment||"",
+    average:average, sum:sum, hasCritical:hasCritical,
+    evaluatedBy:c.evaluatedBy||state.controller, createdAt:c.createdAt||new Date().toISOString()
+  };
+  try{
+    await Store.saveEvaluation(rec);
+    toast("Оценка сохранена");
+    newEvaluation();
+    state.tab="list";
+    render();
+  }catch(e){ console.error(e); toast("Ошибка сохранения"); }
+}
+
+/* ============================================================
+   7. ВКЛАДКА «ОЦЕНКИ»
+   ============================================================ */
+function renderList(){
+  const wrap=document.createElement("div");
+  wrap.appendChild(el(`<div class="page-head"><h2>Оценки звонков</h2><button class="btn sm" id="new-eval">+ Новая оценка</button></div>`));
+  const evals = state.evals||[];
+  if(!evals.length){ wrap.appendChild(el(`<div class="card empty">Оценок пока нет. Нажмите «Новая оценка», чтобы оценить первый звонок.</div>`)); }
+  else {
+    const t = el(`<div class="tbl-wrap"><table><thead><tr>
+      <th>Дата</th><th>Сотрудник</th><th>Номер</th><th class="num">Средняя</th><th>Оценил</th><th></th>
+    </tr></thead><tbody></tbody></table></div>`);
+    const tb=t.querySelector("tbody");
+    evals.forEach(ev=>{
+      const avg = ev.hasCritical ? `<span class="pill r">0 · крит.</span>` : (ev.average==null?`<span class="pill n">—</span>`:`<span class="pill ${ev.average>=90?"g":ev.average>=70?"n":"r"}">${ev.average}</span>`);
+      const row = el(`<tr>
+        <td>${fmtDate(ev.callDate)}</td>
+        <td>${esc(ev.employee)}</td>
+        <td>${esc(ev.phone)||"—"}</td>
+        <td class="num">${avg}</td>
+        <td>${esc(ev.evaluatedBy)||"—"}</td>
+        <td><div class="row-actions"><button class="icon-btn" data-open>Открыть</button><button class="icon-btn del" data-del>Удалить</button></div></td>
+      </tr>`);
+      row.querySelector("[data-open]").onclick=()=>openEvaluation(ev);
+      row.querySelector("[data-del]").onclick=async()=>{ if(confirm("Удалить оценку?")){ await Store.deleteEvaluation(ev.id); state.evals=await Store.listEvaluations(); render(); } };
+      tb.appendChild(row);
+    });
+    wrap.appendChild(t);
+  }
+  wrap.querySelector("#new-eval").onclick=()=>{ newEvaluation(); state.tab="evaluate"; render(); };
+  return wrap;
+}
+function openEvaluation(ev){
+  state.current = JSON.parse(JSON.stringify(ev));
+  state.current._openComments={};
+  Object.keys(state.current.comments||{}).forEach(k=>state.current._openComments[k]=true);
+  state.tab="evaluate"; render();
+}
+
+/* ============================================================
+   8. ВКЛАДКА «СВОДНАЯ СТАТИСТИКА»
+   ============================================================ */
+const statFilters = { from:"", to:"", group:"", employee:"" };
+function renderStats(){
+  const wrap=document.createElement("div");
+  wrap.appendChild(el(`<div class="page-head"><h2>Сводная статистика</h2><button class="btn ghost sm" id="stat-export">⬇ Скачать CSV</button></div>`));
+
+  const groups = [...new Set(state.config.roster.map(r=>r.group))];
+  const emps = state.config.roster.map(r=>r.name);
+  const f = el(`<div class="card"><div class="filters">
+    <div class="field"><label>С даты</label><input type="date" id="f-from" value="${statFilters.from}"></div>
+    <div class="field"><label>По дату</label><input type="date" id="f-to" value="${statFilters.to}"></div>
+    <div class="field"><label>Группа</label><select id="f-group"><option value="">Все</option>${groups.map(g=>`<option ${statFilters.group===g?"selected":""}>${esc(g)}</option>`).join("")}</select></div>
+    <div class="field"><label>Сотрудник</label><select id="f-emp"><option value="">Все</option>${emps.map(e=>`<option ${statFilters.employee===e?"selected":""}>${esc(e)}</option>`).join("")}</select></div>
+    <button class="btn sm" id="f-apply">Показать</button>
+    <button class="btn ghost sm" id="f-reset">Сбросить</button>
+  </div></div>`);
+  wrap.appendChild(f);
+
+  // фильтрация
+  let evals = (state.evals||[]).filter(ev=>{
+    const d = (ev.callDate||"").slice(0,10);
+    if(statFilters.from && d < statFilters.from) return false;
+    if(statFilters.to && d > statFilters.to) return false;
+    if(statFilters.group && ev.group!==statFilters.group) return false;
+    if(statFilters.employee && ev.employee!==statFilters.employee) return false;
+    return true;
+  });
+
+  // агрегация по группам/сотрудникам
+  const byGroup = {};
+  state.config.roster.forEach(r=>{ if(!byGroup[r.group]) byGroup[r.group]={emps:{},list:[]}; byGroup[r.group].emps[r.name]={scores:[],crit:0}; });
+  evals.forEach(ev=>{
+    const g = ev.group||"Без группы";
+    if(!byGroup[g]) byGroup[g]={emps:{},list:[]};
+    if(!byGroup[g].emps[ev.employee]) byGroup[g].emps[ev.employee]={scores:[],crit:0};
+    byGroup[g].emps[ev.employee].scores.push(ev.average==null?0:ev.average);
+    if(ev.hasCritical) byGroup[g].emps[ev.employee].crit++;
+    byGroup[g].list.push(ev);
+  });
+
+  const avg = arr => arr.length ? Math.round(arr.reduce((a,b)=>a+b,0)/arr.length) : null;
+
+  const t = el(`<div class="tbl-wrap"><table><thead><tr>
+    <th>Группа / сотрудник</th><th class="num">Средняя оценка</th><th class="num">Оценено звонков</th><th class="num">Крит. ошибок</th>
+  </tr></thead><tbody></tbody></table></div>`);
+  const tb=t.querySelector("tbody");
+
+  let allScores=[], allCount=0, allCrit=0;
+  Object.keys(byGroup).forEach(g=>{
+    if(statFilters.group && g!==statFilters.group) return;
+    const grp=byGroup[g];
+    const gScores=[]; let gCount=0, gCrit=0;
+    Object.values(grp.emps).forEach(e=>{ e.scores.forEach(s=>gScores.push(s)); gCount+=e.scores.length; gCrit+=e.crit; });
+    // строка группы
+    tb.appendChild(el(`<tr class="grp-row"><td>${esc(g)}</td><td class="num">${gScores.length?avg(gScores):"—"}</td><td class="num">${gCount}</td><td class="num">${gCrit||"—"}</td></tr>`));
+    // сотрудники
+    Object.keys(grp.emps).forEach(name=>{
+      if(statFilters.employee && name!==statFilters.employee) return;
+      const e=grp.emps[name];
+      const a = e.scores.length?avg(e.scores):null;
+      tb.appendChild(el(`<tr><td style="padding-left:28px">${esc(name)}</td>
+        <td class="num">${a==null?'<span class="pill n">н/д</span>':`<span class="pill ${a>=90?"g":a>=70?"n":"r"}">${a}</span>`}</td>
+        <td class="num">${e.scores.length}</td>
+        <td class="num">${e.crit||"—"}</td></tr>`));
+    });
+    allScores=allScores.concat(gScores); allCount+=gCount; allCrit+=gCrit;
+  });
+  if(!statFilters.group){
+    tb.appendChild(el(`<tr class="total-row"><td>Итого</td><td class="num">${allScores.length?avg(allScores):"—"}</td><td class="num">${allCount}</td><td class="num">${allCrit||"—"}</td></tr>`));
+  }
+  if(!evals.length){ tb.innerHTML=`<tr><td colspan="4" class="empty">Нет оценок за выбранный период</td></tr>`; }
+  wrap.appendChild(t);
+
+  // handlers
+  f.querySelector("#f-apply").onclick=()=>{ statFilters.from=f.querySelector("#f-from").value; statFilters.to=f.querySelector("#f-to").value; statFilters.group=f.querySelector("#f-group").value; statFilters.employee=f.querySelector("#f-emp").value; render(); };
+  f.querySelector("#f-reset").onclick=()=>{ statFilters.from=statFilters.to=statFilters.group=statFilters.employee=""; render(); };
+  wrap.querySelector("#stat-export").onclick=()=>exportStatsCSV(evals);
+  return wrap;
+}
+function exportStatsCSV(evals){
+  const rows=[["Дата","Сотрудник","Группа","Номер","Средняя","Сумма","Крит. ошибка","Оценил"]];
+  evals.forEach(ev=>rows.push([fmtDate(ev.callDate),ev.employee,ev.group,ev.phone,ev.hasCritical?0:(ev.average??""),ev.sum??"",ev.hasCritical?"да":"",ev.evaluatedBy]));
+  const csv="\uFEFF"+rows.map(r=>r.map(c=>`"${String(c==null?"":c).replace(/"/g,'""')}"`).join(";")).join("\n");
+  const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="Статистика_оценок.csv"; a.click();
+}
+
+/* ============================================================
+   9. ВКЛАДКА «БЛАНК» (редактор)
+   ============================================================ */
+function renderBlankEditor(){
+  if(!state.editingBlank) state.editingBlank = JSON.parse(JSON.stringify(state.blank));
+  const b = state.editingBlank;
+  const wrap=document.createElement("div");
+  wrap.appendChild(el(`<div class="page-head"><h2>Настройка бланка</h2>
+    <div style="display:flex;gap:8px">
+      <button class="btn ghost sm" id="blank-reset">Отменить</button>
+      <button class="btn sm" id="blank-save">Сохранить бланк</button>
+    </div></div>`));
+  wrap.appendChild(el(`<div class="card"><div class="field" style="margin:0"><label>Название бланка</label><input id="blank-name" value="${esc(b.name)}"></div></div>`));
+
+  const secBox=document.createElement("div");
+  b.sections.forEach((sec,si)=>{
+    const secEl=el(`<div class="ed-section">
+      <div class="ed-section-head">
+        <input class="sec-title" value="${esc(sec.title)}">
+        <button class="icon-btn mini sec-up">↑</button>
+        <button class="icon-btn mini sec-down">↓</button>
+        <button class="icon-btn del mini sec-del">Удалить блок</button>
+      </div>
+      <div class="ed-crits"></div>
+      <div style="padding:10px 14px"><button class="btn ghost mini add-crit">+ Критерий</button></div>
+    </div>`);
+    secEl.querySelector(".sec-title").oninput=e=>sec.title=e.target.value;
+    secEl.querySelector(".sec-up").onclick=()=>{ if(si>0){[b.sections[si-1],b.sections[si]]=[b.sections[si],b.sections[si-1]];render();} };
+    secEl.querySelector(".sec-down").onclick=()=>{ if(si<b.sections.length-1){[b.sections[si+1],b.sections[si]]=[b.sections[si],b.sections[si+1]];render();} };
+    secEl.querySelector(".sec-del").onclick=()=>{ if(confirm("Удалить блок целиком?")){b.sections.splice(si,1);render();} };
+    const cb=secEl.querySelector(".ed-crits");
+    sec.criteria.forEach((cr,ci)=>{
+      const cEl=el(`<div class="ed-crit">
+        <input class="c-name" value="${esc(cr.name)}" placeholder="Название критерия">
+        <textarea class="c-hint" placeholder="Подсказка">${esc(cr.hint||"")}</textarea>
+        <select class="c-weight">
+          <option value="1" ${cr.weight==1?"selected":""}>x1</option>
+          <option value="1.5" ${cr.weight==1.5?"selected":""}>x1.5</option>
+          <option value="2" ${cr.weight==2?"selected":""}>x2</option>
+        </select>
+        <div class="ed-checks">
+          <label><input type="checkbox" class="c-req" ${cr.required?"checked":""}> Обязательный</label>
+          <button class="icon-btn del mini c-del">Удалить</button>
+        </div>
+      </div>`);
+      cEl.querySelector(".c-name").oninput=e=>cr.name=e.target.value;
+      cEl.querySelector(".c-hint").oninput=e=>cr.hint=e.target.value;
+      cEl.querySelector(".c-weight").onchange=e=>cr.weight=parseFloat(e.target.value);
+      cEl.querySelector(".c-req").onchange=e=>cr.required=e.target.checked;
+      cEl.querySelector(".c-del").onclick=()=>{ sec.criteria.splice(ci,1); render(); };
+      cb.appendChild(cEl);
+    });
+    secEl.querySelector(".add-crit").onclick=()=>{ sec.criteria.push({id:"c"+Date.now().toString(36),name:"",hint:"",weight:1,required:false}); render(); };
+    secBox.appendChild(secEl);
+  });
+  wrap.appendChild(secBox);
+  const addSec=el(`<div class="toolbar"><button class="btn ghost sm" id="add-section">+ Добавить блок</button></div>`);
+  addSec.querySelector("#add-section").onclick=()=>{ b.sections.push({title:"Новый блок",criteria:[]}); render(); };
+  wrap.appendChild(addSec);
+
+  wrap.querySelector("#blank-name").oninput=e=>b.name=e.target.value;
+  wrap.querySelector("#blank-reset").onclick=()=>{ state.editingBlank=null; render(); };
+  wrap.querySelector("#blank-save").onclick=async()=>{
+    // гарантируем уникальные id
+    b.sections.forEach(s=>s.criteria.forEach(c=>{ if(!c.id) c.id="c"+Math.random().toString(36).slice(2,8); }));
+    await Store.saveBlank(b);
+    state.blank = JSON.parse(JSON.stringify(b));
+    state.editingBlank=null;
+    toast("Бланк сохранён");
+    render();
+  };
+  return wrap;
+}
+
+/* ============================================================
+   10. ВКЛАДКА «НАСТРОЙКИ»
+   ============================================================ */
+function renderSettings(){
+  const wrap=document.createElement("div");
+  wrap.appendChild(el(`<div class="page-head"><h2>Настройки</h2></div>`));
+
+  // роутер
+  const roster = JSON.parse(JSON.stringify(state.config.roster));
+  const rb=el(`<div class="card settings-block"><h3>Сотрудники</h3>
+    <div style="color:var(--muted);font-size:12.5px;margin-bottom:12px">Все входят по своему паролю. «Контролёр» — полный доступ; остальные видят только свои звонки (просмотр). Пустое поле пароля = вход по общему паролю доступа. Пароль показывается только при вводе, хранится в виде SHA-256.</div>
+    <div id="roster-list"></div>
+    <div class="toolbar"><button class="btn ghost sm" id="add-emp">+ Добавить сотрудника</button><button class="btn sm" id="save-roster">Сохранить список</button></div>
+  </div>`);
+  const rl=rb.querySelector("#roster-list");
+  function drawRoster(){
+    rl.innerHTML="";
+    roster.forEach((r,i)=>{
+      const ph = r.passHash ? "пароль задан — введите новый" : "задать пароль (как в lk-sales)";
+      const row=el(`<div class="roster-row" style="grid-template-columns:1.2fr .8fr 1.5fr auto auto">
+        <input value="${esc(r.name)}" placeholder="ФИО" class="r-name">
+        <input value="${esc(r.group)}" placeholder="Группа" class="r-group">
+        <input type="text" class="r-pass" placeholder="${ph}" autocomplete="off">
+        <label class="ctl"><input type="checkbox" class="r-ctl" ${r.controller?"checked":""}> Контролёр</label>
+        <button class="icon-btn del mini r-del">✕</button>
+      </div>`);
+      row.querySelector(".r-name").oninput=e=>r.name=e.target.value;
+      row.querySelector(".r-group").oninput=e=>r.group=e.target.value;
+      row.querySelector(".r-pass").oninput=e=>r._newpass=e.target.value;
+      row.querySelector(".r-ctl").onchange=e=>r.controller=e.target.checked;
+      row.querySelector(".r-del").onclick=()=>{ roster.splice(i,1); drawRoster(); };
+      rl.appendChild(row);
+    });
+  }
+  drawRoster();
+  rb.querySelector("#add-emp").onclick=()=>{ roster.push({name:"",group:"Телемаркетинг",controller:false}); drawRoster(); };
+  rb.querySelector("#save-roster").onclick=async()=>{
+    const clean=roster.filter(r=>r.name.trim());
+    for(const r of clean){ if(r._newpass && r._newpass.trim()) r.passHash=await sha256(r._newpass.trim()); delete r._newpass; }
+    state.config.roster=clean;
+    await Store.saveConfig(state.config);
+    fillLoginControllers();
+    toast("Список сохранён");
+  };
+  wrap.appendChild(rb);
+
+  // пароль
+  const pb=el(`<div class="card settings-block"><h3>Пароль доступа</h3>
+    <div class="meta-grid" style="max-width:520px">
+      <div class="field"><label>Новый пароль</label><input type="password" id="np1"></div>
+      <div class="field"><label>Повторите</label><input type="password" id="np2"></div>
+    </div>
+    <div class="toolbar"><button class="btn sm" id="save-pass">Обновить пароль</button></div>
+    <div class="err" id="pass-err"></div>
+  </div>`);
+  pb.querySelector("#save-pass").onclick=async()=>{
+    const a=pb.querySelector("#np1").value, b=pb.querySelector("#np2").value;
+    if(a.length<4){ pb.querySelector("#pass-err").textContent="Минимум 4 символа"; return; }
+    if(a!==b){ pb.querySelector("#pass-err").textContent="Пароли не совпадают"; return; }
+    state.config.accessPassHash=await sha256(a);
+    await Store.saveConfig(state.config);
+    pb.querySelector("#pass-err").textContent="";
+    pb.querySelector("#np1").value=pb.querySelector("#np2").value="";
+    toast("Пароль обновлён");
+  };
+  wrap.appendChild(pb);
+
+  return wrap;
+}
+
+/* ============================================================
+   10б. ВКЛАДКА СОТРУДНИКА «МОИ ЗВОНКИ» (только просмотр)
+   ============================================================ */
+let myCallsOpen = null;
+function renderMyCalls(){
+  const wrap=document.createElement("div");
+  const mine=(state.evals||[]).filter(e=>e.employee===state.controller).sort((a,b)=>(b.callDate||"").localeCompare(a.callDate||""));
+  if(myCallsOpen){
+    const ev=mine.find(e=>e.id===myCallsOpen);
+    if(ev){ wrap.appendChild(renderEvalReadonly(ev)); return wrap; }
+    myCallsOpen=null;
+  }
+  wrap.appendChild(el(`<div class="page-head"><h2>Мои звонки</h2><span style="color:var(--muted)">${mine.length} оцен.</span></div>`));
+  if(!mine.length){ wrap.appendChild(el(`<div class="card empty">Пока нет оценённых звонков.</div>`)); return wrap; }
+  const t=el(`<div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Номер</th><th class="num">Средняя</th><th>Оценил</th><th></th></tr></thead><tbody></tbody></table></div>`);
+  const tb=t.querySelector("tbody");
+  mine.forEach(ev=>{
+    const avg=ev.hasCritical?`<span class="pill r">0 · крит.</span>`:(ev.average==null?`<span class="pill n">—</span>`:`<span class="pill ${ev.average>=90?"g":ev.average>=70?"n":"r"}">${ev.average}</span>`);
+    const row=el(`<tr><td>${fmtDate(ev.callDate)}</td><td>${esc(ev.phone)||"—"}</td><td class="num">${avg}</td><td>${esc(ev.evaluatedBy)||"—"}</td><td><div class="row-actions"><button class="icon-btn" data-open>Смотреть</button></div></td></tr>`);
+    row.querySelector("[data-open]").onclick=()=>{ myCallsOpen=ev.id; render(); };
+    tb.appendChild(row);
+  });
+  wrap.appendChild(t);
+  return wrap;
+}
+function renderEvalReadonly(ev){
+  const blank=state.blank, wrap=document.createElement("div");
+  wrap.appendChild(el(`<div class="page-head"><h2>Оценка звонка</h2><button class="btn ghost sm" id="ro-back">← Назад</button></div>`));
+  wrap.appendChild(el(`<div class="card"><div class="meta-grid">
+    <div class="field"><label>Сотрудник</label><div>${esc(ev.employee)}</div></div>
+    <div class="field"><label>Номер</label><div>${esc(ev.phone)||"—"}</div></div>
+    <div class="field"><label>Начало разговора</label><div>${fmtDate(ev.callDate)}</div></div>
+    <div class="field"><label>Длительность</label><div>${esc(ev.duration)||"—"}</div></div>
+  </div></div>`));
+  if(ev.audioUrl){ const u=ev.audioUrl;
+    if(/\.(mp3|wav|ogg|m4a)(\?|$)/i.test(u)) wrap.appendChild(el(`<div class="card" style="padding:12px"><audio controls src="${esc(u)}"></audio></div>`));
+    else wrap.appendChild(el(`<div class="card" style="padding:12px"><a class="btn ghost sm" href="${esc(u)}" target="_blank" rel="noopener">▶ Открыть запись</a></div>`));
+  }
+  blank.sections.forEach(sec=>{
+    const rows=sec.criteria.map(cr=>{
+      const v=ev.scores?ev.scores[cr.id]:null;
+      const na=(v===undefined||v===null);
+      const isCrit=!!(ev.critical&&ev.critical[cr.id]);
+      let dots=""; for(let i=0;i<=10;i++){const val=i*10;const on=!na&&v>=val&&v>0;const zero=!na&&v===0&&i===0;dots+=`<div class="dot ${on?"on":""} ${zero?"zero":""}" style="cursor:default"></div>`;}
+      const cmt=(ev.comments&&ev.comments[cr.id])?`<div class="hint" style="color:var(--ink);margin-top:6px">💬 ${esc(ev.comments[cr.id])}</div>`:"";
+      return `<div class="crit ${isCrit?"is-critical":""}"><div><div class="cname">${esc(cr.name)}${isCrit?'<span class="req">⚠ крит.</span>':""}</div>${cmt}</div><div class="score-col"><div class="dots">${dots}</div><span class="sval ${na?"na":""}">${na?"—":v}</span></div></div>`;
+    }).join("");
+    wrap.appendChild(el(`<div class="section"><div class="section-bar"><span class="t">${esc(sec.title)}</span></div><div class="crit-list">${rows}</div></div>`));
+  });
+  const {sum,average,hasCritical}=computeScore(ev,blank);
+  wrap.appendChild(el(`<div class="totals"><div class="tot"><span>Средняя оценка</span><b class="avg">${average==null?"—":average}</b></div><div class="tot"><span>Сумма</span><b>${sum}</b></div>${hasCritical?'<div class="crit-warn">⚠ Критическая ошибка — итог обнулён</div>':""}<div class="spacer"></div></div>`));
+  if(ev.controllerComment) wrap.appendChild(el(`<div class="card"><div class="field" style="margin:0"><label>Комментарий контролёра</label><div>${esc(ev.controllerComment)}</div></div></div>`));
+  wrap.querySelector("#ro-back").onclick=()=>{ myCallsOpen=null; render(); };
+  return wrap;
+}
+
+/* ============================================================
+   11. СТАРТ
+   ============================================================ */
+(async function boot(){
+  await Store.init();
+  fillLoginControllers();
+})();
+</script>
+</body>
+</html>
