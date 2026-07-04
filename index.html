@@ -931,16 +931,12 @@ function renderSettings(){
 /* ============================================================
    10б. ВКЛАДКА СОТРУДНИКА «МОИ ЗВОНКИ» (только просмотр)
    ============================================================ */
-let myCallsOpen = null;
+let myCallsOpenEv = null;
 let myMonth = "";
 function renderMyCalls(){
   const wrap=document.createElement("div");
+  if(myCallsOpenEv){ wrap.appendChild(renderEvalReadonly(myCallsOpenEv)); return wrap; }
   const mineAll=(state.evals||[]).filter(e=>e.employee===state.controller).sort((a,b)=>(b.callDate||"").localeCompare(a.callDate||""));
-  if(myCallsOpen){
-    const ev=mineAll.find(e=>e.id===myCallsOpen);
-    if(ev){ wrap.appendChild(renderEvalReadonly(ev)); return wrap; }
-    myCallsOpen=null;
-  }
   const mine = myMonth ? mineAll.filter(e=>(e.callDate||"").slice(0,7)===myMonth) : mineAll;
   const head=el(`<div class="page-head"><h2>Мои звонки</h2><div style="display:flex;gap:10px;align-items:center">${monthSelect(mineAll,myMonth)}<span style="color:var(--muted)">${mine.length} оцен.</span></div></div>`);
   head.querySelector(".month-filter").onchange=e=>{ myMonth=e.target.value; render(); };
@@ -951,7 +947,7 @@ function renderMyCalls(){
   mine.forEach(ev=>{
     const avg=ev.hasCritical?`<span class="pill r">0 · крит.</span>`:(ev.average==null?`<span class="pill n">—</span>`:`<span class="pill ${ev.average>=90?"g":ev.average>=70?"n":"r"}">${ev.average}</span>`);
     const row=el(`<tr><td>${fmtDate(ev.callDate)}</td><td>${esc(ev.phone)||"—"}</td><td class="num">${avg}</td><td>${esc(ev.evaluatedBy)||"—"}</td><td><div class="row-actions"><button class="icon-btn" data-open>Смотреть</button></div></td></tr>`);
-    row.querySelector("[data-open]").onclick=()=>{ myCallsOpen=ev.id; render(); };
+    row.querySelector("[data-open]").onclick=()=>{ myCallsOpenEv=ev; render(); };
     tb.appendChild(row);
   });
   wrap.appendChild(t);
@@ -981,7 +977,7 @@ function renderEvalReadonly(ev){
   const {sum,average,hasCritical}=computeScore(ev,blank);
   wrap.appendChild(el(`<div class="totals"><div class="tot"><span>Средняя оценка</span><b class="avg">${average==null?"—":average}</b></div><div class="tot"><span>Сумма</span><b>${sum}</b></div>${hasCritical?'<div class="crit-warn">⚠ Критическая ошибка — итог обнулён</div>':""}<div class="spacer"></div></div>`));
   if(ev.controllerComment) wrap.appendChild(el(`<div class="card"><div class="field" style="margin:0"><label>Комментарий контролёра</label><div>${esc(ev.controllerComment)}</div></div></div>`));
-  wrap.querySelector("#ro-back").onclick=()=>{ myCallsOpen=null; render(); };
+  wrap.querySelector("#ro-back").onclick=()=>{ myCallsOpenEv=null; render(); };
   return wrap;
 }
 
