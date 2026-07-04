@@ -97,6 +97,11 @@
   .stat-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 18px;min-width:150px}
   .stat-card .v{font-size:24px;font-weight:700;color:var(--brand)}
   .stat-card .l{color:var(--muted);font-size:12px}
+  .weak-row{display:grid;grid-template-columns:minmax(150px,1.4fr) 1fr 54px;gap:12px;align-items:center;padding:5px 0}
+  .weak-name{font-size:13px}
+  .weak-bar{background:var(--bar);border-radius:6px;height:12px;overflow:hidden}
+  .weak-fill{height:100%;border-radius:6px}
+  .weak-val{font-weight:700;font-size:13px;text-align:right}
   .cmt-required{border-color:var(--warn)!important}
   .crit textarea{grid-column:1/-1;margin-top:4px;min-height:52px;resize:vertical}
   .crit.needs-fill{box-shadow:inset 3px 0 0 #f59e0b}
@@ -316,8 +321,10 @@ const Store = {
     let blank = await this.getBlank();
     if(!blank){ blank = JSON.parse(JSON.stringify(DEFAULT_BLANK)); await this.saveBlank(blank); }
     state.blank = blank;
+    // фокусы развития
+    state.focus = (await this.getFocus())||{};
   },
-  _mem:{config:null, blank:null, evals:[]},
+  _mem:{config:null, blank:null, evals:[], focus:{}},
   _seedMemory(){
     this._mem.config = {roster:JSON.parse(JSON.stringify(DEFAULT_ROSTER)), accessPassHash:DEFAULT_PASS_HASH};
     this._mem.blank = JSON.parse(JSON.stringify(DEFAULT_BLANK));
@@ -343,6 +350,16 @@ const Store = {
     if(this.backend==="memory") return this._mem.blank;
     const d = await db.collection("qm_config").doc("blank").get();
     return d.exists ? d.data() : null;
+  },
+  async getFocus(){
+    if(this.backend==="memory") return this._mem.focus;
+    const d = await db.collection("qm_config").doc("focus").get();
+    return d.exists ? (d.data().map||{}) : {};
+  },
+  async saveFocus(map){
+    state.focus = map;
+    if(this.backend==="memory"){ this._mem.focus=map; return; }
+    await db.collection("qm_config").doc("focus").set({map});
   },
   async saveBlank(blank){
     if(this.backend==="memory"){ this._mem.blank=blank; return; }
@@ -371,7 +388,7 @@ const Store = {
 /* ============================================================
    3. СОСТОЯНИЕ + УТИЛИТЫ
    ============================================================ */
-const state = { config:null, blank:null, controller:null, currentUser:null, role:null, tab:"evaluate", current:null, evals:null, editingBlank:null };
+const state = { config:null, blank:null, focus:{}, controller:null, currentUser:null, role:null, tab:"evaluate", current:null, evals:null, editingBlank:null };
 
 async function sha256(str){
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
@@ -388,6 +405,125 @@ function allCriteria(blank){ const out=[]; blank.sections.forEach(s=>s.criteria.
 
 function fmtScore(n){ if(n==null) return "—"; return Number.isInteger(n)? String(n) : (Math.round(n*100)/100).toFixed(2); }
 function fmtScore2(n){ if(n==null) return "—"; return (Math.round(n*100)/100).toFixed(2); }
+function criterionStats(evals, blank){
+  const map={};
+  allCriteria(blank).forEach(cr=>{ map[cr.id]={id:cr.id, name:cr.name, sum:0, n:0}; });
+  (evals||[]).forEach(ev=>{ if(!ev.scores) return; for(const id in map){ const v=ev.scores[id]; if(v!=null){ map[id].sum+=v; map[id].n++; } } });
+  return Object.values(map).filter(m=>m.n>0).map(m=>({id:m.id, name:m.name, avg:m.sum/m.n, n:m.n})).sort((a,b)=>a.avg-b.avg);
+}
+function scoreOfEv(ev){ return ev.hasCritical?0:(ev.average==null?null:ev.average); }
+function weakColor(a){ return a>=90?"var(--ok)":a>=70?"#f59e0b":"var(--warn)"; }
+function critAvgFor(evals, critId){ let sum=0,n=0; (evals||[]).forEach(ev=>{ const v=ev.scores?ev.scores[critId]:null; if(v!=null){sum+=v;n++;} }); return n?sum/n:null; }
+function sectionStats(evals, blank){
+  return blank.sections.map(sec=>{ let sum=0,n=0; (evals||[]).forEach(ev=>{ if(!ev.scores) return; sec.criteria.forEach(cr=>{ const v=ev.scores[cr.id]; if(v!=null){sum+=v;n++;} }); }); return {name:sec.title, avg:n?sum/n:null, n}; }).filter(s=>s.n>0).sort((a,b)=>a.avg-b.avg);
+}
+function monthlyAverages(evals){
+  const m={};
+  (evals||[]).forEach(ev=>{ const mo=(ev.callDate||"").slice(0,7); if(mo.length!==7) return; const s=scoreOfEv(ev); if(s==null) return; (m[mo]=m[mo]||[]).push(s); });
+  return Object.keys(m).sort().map(mo=>({month:mo, avg:m[mo].reduce((a,b)=>a+b,0)/m[mo].length, n:m[mo].length}));
+}
+function employeeTrend(employee){
+  const ma=monthlyAverages((state.evals||[]).filter(e=>e.employee===employee));
+  if(ma.length<2) return null;
+  return ma[ma.length-1].avg - ma[ma.length-2].avg;
+}
+function trendBadge(d){
+  if(d==null) return '<span class="pill n">—</span>';
+  if(d>0.5) return `<span class="pill g">▲ ${fmtScore2(d)}</span>`;
+  if(d<-0.5) return `<span class="pill r">▼ ${fmtScore2(Math.abs(d))}</span>`;
+  return '<span class="pill n">→ 0</span>';
+}
+function renderSectionBreakdown(evals){
+  const rows=sectionStats(evals, state.blank); if(!rows.length) return null;
+  const card=el(`<div class="card"><h3 style="margin:0 0 12px;font-size:15px">Разбивка по блокам бланка</h3><div class="weak-list"></div></div>`);
+  const list=card.querySelector(".weak-list");
+  rows.forEach(r=>list.appendChild(el(`<div class="weak-row" title="Оценок: ${r.n}"><div class="weak-name">${esc(r.name)}</div><div class="weak-bar"><div class="weak-fill" style="width:${Math.max(2,Math.min(100,r.avg))}%;background:${weakColor(r.avg)}"></div></div><div class="weak-val" style="color:${weakColor(r.avg)}">${fmtScore2(r.avg)}</div></div>`)));
+  return card;
+}
+function renderTrendChart(evals, title){
+  const pts=monthlyAverages(evals); if(!pts.length) return null;
+  const W=560,H=150,pad=30;
+  const xs = pts.length>1 ? pts.map((p,i)=>pad+i*(W-2*pad)/(pts.length-1)) : [W/2];
+  const minV=Math.min(70,...pts.map(p=>p.avg)), maxV=100;
+  const y=v=>H-pad-(v-minV)/((maxV-minV)||1)*(H-2*pad);
+  const path=pts.map((p,i)=>`${i===0?"M":"L"}${xs[i].toFixed(1)},${y(p.avg).toFixed(1)}`).join(" ");
+  const dots=pts.map((p,i)=>`<circle cx="${xs[i].toFixed(1)}" cy="${y(p.avg).toFixed(1)}" r="4" fill="var(--brand)"></circle><text x="${xs[i].toFixed(1)}" y="${(y(p.avg)-9).toFixed(1)}" text-anchor="middle" font-size="11" fill="var(--ink)" font-weight="700">${fmtScore2(p.avg)}</text>`).join("");
+  const labels=pts.map((p,i)=>`<text x="${xs[i].toFixed(1)}" y="${H-8}" text-anchor="middle" font-size="10" fill="var(--muted)">${esc(monthLabel(p.month))}</text>`).join("");
+  return el(`<div class="card"><h3 style="margin:0 0 8px;font-size:15px">${esc(title)}</h3><svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto"><line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="var(--line)"></line>${pts.length>1?`<path d="${path}" fill="none" stroke="var(--brand)" stroke-width="2.5"></path>`:""}${dots}${labels}</svg></div>`);
+}
+function renderCritLog(evals){
+  const crits=(evals||[]).filter(e=>e.hasCritical).sort((a,b)=>(b.callDate||"").localeCompare(a.callDate||""));
+  const card=el(`<div class="card"><h3 style="margin:0 0 12px;font-size:15px">Журнал критических ошибок (${crits.length})</h3></div>`);
+  if(!crits.length){ card.appendChild(el(`<div class="hint">За период критических ошибок нет.</div>`)); return card; }
+  const critNames=id=>{ const cr=allCriteria(state.blank).find(c=>c.id===id); return cr?cr.name:id; };
+  const t=el(`<div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Сотрудник</th><th>Критерий</th><th>Оценил</th><th></th></tr></thead><tbody></tbody></table></div>`);
+  const tb=t.querySelector("tbody");
+  crits.forEach(ev=>{
+    const names=Object.keys(ev.critical||{}).filter(k=>ev.critical[k]).map(critNames).join(", ")||"—";
+    const row=el(`<tr><td>${fmtDate(ev.callDate)}</td><td>${esc(ev.employee)}</td><td>${esc(names)}</td><td>${esc(ev.evaluatedBy)||"—"}</td><td><button class="icon-btn" data-open>Открыть</button></td></tr>`);
+    row.querySelector("[data-open]").onclick=()=>openEvaluation(ev);
+    tb.appendChild(row);
+  });
+  card.appendChild(t); return card;
+}
+function renderCalibration(evals){
+  const m={};
+  (evals||[]).forEach(ev=>{ const c=ev.evaluatedBy||"—"; const s=scoreOfEv(ev); m[c]=m[c]||{n:0,sum:0,crit:0}; m[c].n++; if(s!=null)m[c].sum+=s; if(ev.hasCritical)m[c].crit++; });
+  const rows=Object.keys(m).map(c=>({name:c, n:m[c].n, avg:m[c].n?m[c].sum/m[c].n:null, crit:m[c].crit})).sort((a,b)=>b.n-a.n);
+  if(!rows.length) return null;
+  const card=el(`<div class="card"><h3 style="margin:0 0 4px;font-size:15px">Калибровка контролёров</h3><div class="hint" style="margin-bottom:12px">Сколько оценил каждый контролёр и какой средний балл ставит. Большой разброс — повод сверить критерии между собой.</div></div>`);
+  const t=el(`<div class="tbl-wrap"><table><thead><tr><th>Контролёр</th><th class="num">Оценок</th><th class="num">Средний балл</th><th class="num">Крит.</th></tr></thead><tbody></tbody></table></div>`);
+  const tb=t.querySelector("tbody");
+  rows.forEach(r=>tb.appendChild(el(`<tr><td>${esc(r.name)}</td><td class="num">${r.n}</td><td class="num">${r.avg==null?"—":fmtScore2(r.avg)}</td><td class="num">${r.crit||"—"}</td></tr>`)));
+  card.appendChild(t); return card;
+}
+function renderFocus(employee, employeeEvals, editable){
+  const f=state.focus[employee];
+  const card=el(`<div class="card"><h3 style="margin:0 0 4px;font-size:15px">🎯 Фокусы развития${f&&f.month?` · ${esc(monthLabel(f.month))}`:""}</h3></div>`);
+  if(f && f.criteria && f.criteria.length){
+    const list=el(`<div class="weak-list" style="margin-top:8px"></div>`);
+    f.criteria.forEach(fc=>{
+      const cur=critAvgFor(employeeEvals, fc.id), base=fc.baseline;
+      const delta=(cur!=null&&base!=null)?cur-base:null;
+      const arrow=delta==null?"":(delta>0.5?`<span style="color:var(--ok)">▲ +${fmtScore2(delta)}</span>`:(delta<-0.5?`<span style="color:var(--warn)">▼ ${fmtScore2(Math.abs(delta))}</span>`:`<span style="color:var(--muted)">→</span>`));
+      list.appendChild(el(`<div class="weak-row"><div class="weak-name">${esc(fc.name)}</div><div class="weak-bar"><div class="weak-fill" style="width:${cur==null?2:Math.max(2,Math.min(100,cur))}%;background:${cur==null?"var(--muted)":weakColor(cur)}"></div></div><div class="weak-val" style="font-size:12px">${base==null?"—":fmtScore2(base)} → ${cur==null?"—":fmtScore2(cur)} ${arrow}</div></div>`));
+    });
+    card.appendChild(list);
+  } else {
+    card.appendChild(el(`<div class="hint" style="margin-top:6px">Фокусы пока не назначены.</div>`));
+  }
+  if(editable){
+    const weak=criterionStats(employeeEvals, state.blank).slice(0,3);
+    const bar=el(`<div class="toolbar" style="margin-top:12px"></div>`);
+    if(weak.length){
+      const b=el(`<button class="btn sm">Назначить 3 слабых критерия фокусами</button>`);
+      b.onclick=async()=>{
+        const month=new Date().toISOString().slice(0,7);
+        const rec={month, set:new Date().toISOString(), by:state.controller, criteria:weak.map(w=>({id:w.id, name:w.name, baseline:Math.round(w.avg*100)/100}))};
+        await Store.saveFocus({...state.focus, [employee]:rec}); toast("Фокусы назначены"); render();
+      };
+      bar.appendChild(b);
+    }
+    if(f){ const clr=el(`<button class="btn ghost sm">Снять</button>`); clr.onclick=async()=>{ const map={...state.focus}; delete map[employee]; await Store.saveFocus(map); toast("Фокусы сняты"); render(); }; bar.appendChild(clr); }
+    if(weak.length) bar.appendChild(el(`<span class="hint" style="align-self:center">Возьмутся: ${esc(weak.map(w=>w.name).join(", "))}</span>`));
+    card.appendChild(bar);
+  }
+  return card;
+}
+function renderWeakSpots(evals, title){
+  const rows=criterionStats(evals, state.blank);
+  if(!rows.length) return null;
+  const card=el(`<div class="card"><h3 style="margin:0 0 4px;font-size:15px">${esc(title)}</h3><div class="hint" style="margin-bottom:12px">Средний балл по каждому критерию, слабые — вверху.</div><div class="weak-list"></div></div>`);
+  const list=card.querySelector(".weak-list");
+  rows.forEach(r=>{
+    list.appendChild(el(`<div class="weak-row" title="Оценок по критерию: ${r.n}">
+      <div class="weak-name">${esc(r.name)}</div>
+      <div class="weak-bar"><div class="weak-fill" style="width:${Math.max(2,Math.min(100,r.avg))}%;background:${weakColor(r.avg)}"></div></div>
+      <div class="weak-val" style="color:${weakColor(r.avg)}">${fmtScore2(r.avg)}</div>
+    </div>`));
+  });
+  return card;
+}
 function monthSelect(evs, sel){
   const months=[...new Set(evs.map(e=>(e.callDate||"").slice(0,7)).filter(x=>x&&x.length===7))].sort().reverse();
   return `<select class="month-filter" style="width:auto;min-width:150px"><option value="">Все месяцы</option>${months.map(m=>`<option value="${m}" ${sel===m?"selected":""}>${monthLabel(m)}</option>`).join("")}</select>`;
@@ -478,7 +614,7 @@ async function render(){
    6. ВКЛАДКА «ОЦЕНИТЬ ЗВОНОК»
    ============================================================ */
 function newEvaluation(){
-  state.current = { id:null, employee:"", group:"", phone:"", callDate:"", duration:"", audioUrl:"", bitrixUrl:"",
+  state.current = { id:null, employee:"", group:"", phone:"", callDate:"", duration:"", audioUrl:"", bitrixUrl:"", crmUrl:"",
     blankName:state.blank.name, scores:{}, comments:{}, critical:{}, controllerComment:"",
     evaluatedBy:state.controller, createdAt:null, _openComments:{} };
 }
@@ -507,8 +643,8 @@ function renderEvaluate(){
   mg.appendChild(el(`<div class="field"><label>Кому звонил (номер)</label><input id="ev-phone" value="${esc(c.phone)}" placeholder="79000000000"></div>`));
   mg.appendChild(el(`<div class="field"><label>Начало разговора</label><input type="datetime-local" id="ev-date" value="${esc(c.callDate)}"></div>`));
   mg.appendChild(el(`<div class="field"><label>Длительность</label><input id="ev-dur" value="${esc(c.duration)}" placeholder="08:30"></div>`));
-  mg.appendChild(el(`<div class="field" style="grid-column:1/-1"><label>Ссылка на запись</label><input id="ev-audio" value="${esc(c.audioUrl)}" placeholder="https://drive.google.com/file/d/… или прямой .mp3"><div class="hint">Google Drive (доступ «всем, у кого есть ссылка») или прямой mp3 — проиграется прямо здесь. Ссылка из Битрикса откроется в новой вкладке.</div></div>`));
-  mg.appendChild(el(`<div class="field" style="grid-column:1/-1"><label>Ссылка на звонок в Битрикс</label><input id="ev-bitrix" value="${esc(c.bitrixUrl||"")}" placeholder="https://…bitrix24.ru/… (карточка звонка/сделки)"><div class="hint">Открывается кнопкой в новой вкладке (за логином Битрикса). Видна и контролёру, и сотруднику.</div></div>`));
+  mg.appendChild(el(`<div class="field" style="grid-column:1/-1"><label>Ссылка на запись звонка (Google Drive / mp3)</label><input id="ev-audio" value="${esc(c.audioUrl)}" placeholder="https://drive.google.com/file/d/… или прямой .mp3"><div class="hint">Google Drive (доступ «всем, у кого есть ссылка») или прямой mp3 — проиграется прямо здесь.</div></div>`));
+  mg.appendChild(el(`<div class="field" style="grid-column:1/-1"><label>Ссылка на сделку Bitrix24</label><input id="ev-bitrix" value="${esc(c.bitrixUrl||"")}" placeholder="https://…bitrix24.ru/crm/deal/… (сделка)"><div class="hint">Открывается кнопкой в новой вкладке (за логином Битрикса). Видна и контролёру, и сотруднику.</div></div>`));
   wrap.appendChild(meta);
 
   // аудио превью
@@ -643,7 +779,7 @@ async function saveCurrentEvaluation(){
   const {sum, average, hasCritical} = computeScore(c, blank);
   const rec = {
     id:c.id, employee:c.employee, group:c.group||"", phone:c.phone||"", callDate:c.callDate||new Date().toISOString().slice(0,16),
-    duration:c.duration||"", audioUrl:c.audioUrl||"", bitrixUrl:c.bitrixUrl||"", blankName:blank.name,
+    duration:c.duration||"", audioUrl:c.audioUrl||"", bitrixUrl:c.bitrixUrl||"", crmUrl:c.crmUrl||"", blankName:blank.name,
     scores:c.scores, comments:c.comments, critical:c.critical||{}, controllerComment:c.controllerComment||"",
     average:average, sum:sum, hasCritical:hasCritical,
     evaluatedBy:c.evaluatedBy||state.controller, createdAt:c.createdAt||new Date().toISOString()
@@ -755,7 +891,7 @@ function renderStats(){
   const avg = arr => arr.length ? (arr.reduce((a,b)=>a+b,0)/arr.length) : null;
 
   const t = el(`<div class="tbl-wrap"><table><thead><tr>
-    <th>Группа / сотрудник</th><th class="num">Средняя оценка</th><th class="num">Оценено звонков</th><th class="num">Крит. ошибок</th>
+    <th>Группа / сотрудник</th><th class="num">Средняя оценка</th><th class="num">Оценено звонков</th><th class="num">Крит. ошибок</th><th class="num">Тренд к пред. мес.</th>
   </tr></thead><tbody></tbody></table></div>`);
   const tb=t.querySelector("tbody");
 
@@ -766,7 +902,7 @@ function renderStats(){
     const gScores=[]; let gCount=0, gCrit=0;
     Object.values(grp.emps).forEach(e=>{ e.scores.forEach(s=>gScores.push(s)); gCount+=e.scores.length; gCrit+=e.crit; });
     // строка группы
-    tb.appendChild(el(`<tr class="grp-row"><td>${esc(g)}</td><td class="num">${gScores.length?fmtScore2(avg(gScores)):"—"}</td><td class="num">${gCount}</td><td class="num">${gCrit||"—"}</td></tr>`));
+    tb.appendChild(el(`<tr class="grp-row"><td>${esc(g)}</td><td class="num">${gScores.length?fmtScore2(avg(gScores)):"—"}</td><td class="num">${gCount}</td><td class="num">${gCrit||"—"}</td><td class="num"></td></tr>`));
     // сотрудники
     Object.keys(grp.emps).forEach(name=>{
       if(statFilters.employee && name!==statFilters.employee) return;
@@ -775,15 +911,42 @@ function renderStats(){
       tb.appendChild(el(`<tr><td style="padding-left:28px">${esc(name)}</td>
         <td class="num">${a==null?'<span class="pill n">н/д</span>':`<span class="pill ${a>=90?"g":a>=70?"n":"r"}">${fmtScore2(a)}</span>`}</td>
         <td class="num">${e.scores.length}</td>
-        <td class="num">${e.crit||"—"}</td></tr>`));
+        <td class="num">${e.crit||"—"}</td>
+        <td class="num">${trendBadge(employeeTrend(name))}</td></tr>`));
     });
     allScores=allScores.concat(gScores); allCount+=gCount; allCrit+=gCrit;
   });
   if(!statFilters.group){
-    tb.appendChild(el(`<tr class="total-row"><td>Итого</td><td class="num">${allScores.length?fmtScore2(avg(allScores)):"—"}</td><td class="num">${allCount}</td><td class="num">${allCrit||"—"}</td></tr>`));
+    tb.appendChild(el(`<tr class="total-row"><td>Итого</td><td class="num">${allScores.length?fmtScore2(avg(allScores)):"—"}</td><td class="num">${allCount}</td><td class="num">${allCrit||"—"}</td><td class="num"></td></tr>`));
   }
-  if(!evals.length){ tb.innerHTML=`<tr><td colspan="4" class="empty">Нет оценок за выбранный период</td></tr>`; }
+  if(!evals.length){ tb.innerHTML=`<tr><td colspan="5" class="empty">Нет оценок за выбранный период</td></tr>`; }
   wrap.appendChild(t);
+
+  // слабые места (учитывает фильтры)
+  const scopeName = statFilters.employee || statFilters.group || "команда";
+  const wsTitle = statFilters.employee ? `Слабые места: ${statFilters.employee}` : (statFilters.group ? `Слабые места: ${statFilters.group}` : "Слабые места команды");
+  const ws = renderWeakSpots(evals, wsTitle);
+  if(ws) wrap.appendChild(ws);
+
+  // разбивка по блокам
+  const sb = renderSectionBreakdown(evals);
+  if(sb) wrap.appendChild(sb);
+
+  // динамика по месяцам
+  const tc = renderTrendChart(evals, `Динамика среднего балла по месяцам · ${scopeName}`);
+  if(tc) wrap.appendChild(tc);
+
+  // фокусы развития (только когда выбран конкретный сотрудник)
+  if(statFilters.employee){
+    wrap.appendChild(renderFocus(statFilters.employee, evals, true));
+  }
+
+  // калибровка контролёров
+  const cal = renderCalibration(evals);
+  if(cal) wrap.appendChild(cal);
+
+  // журнал критических ошибок
+  wrap.appendChild(renderCritLog(evals));
 
   // handlers
   f.querySelector("#f-apply").onclick=()=>{ statFilters.from=f.querySelector("#f-from").value; statFilters.to=f.querySelector("#f-to").value; statFilters.group=f.querySelector("#f-group").value; statFilters.employee=f.querySelector("#f-emp").value; render(); };
@@ -982,6 +1145,15 @@ function renderMyCalls(){
   }
 
   if(!mine.length){ wrap.appendChild(el(`<div class="card empty">${myMonth?"За выбранный месяц оценок нет.":"Пока нет оценённых звонков."}</div>`)); return wrap; }
+
+  if(state.focus[state.controller]) wrap.appendChild(renderFocus(state.controller, mineAll, false));
+
+  const ws=renderWeakSpots(myMonth?mine:mineAll, "Ваши слабые места");
+  if(ws) wrap.appendChild(ws);
+
+  const tc=renderTrendChart(mineAll, "Динамика вашего балла по месяцам");
+  if(tc) wrap.appendChild(tc);
+
   const t=el(`<div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Номер</th><th class="num">Средняя</th><th>Оценил</th><th></th></tr></thead><tbody></tbody></table></div>`);
   const tb=t.querySelector("tbody");
   mine.forEach(ev=>{
@@ -1006,7 +1178,9 @@ function renderEvalReadonly(ev){
   </div></div>`));
   const links=[];
   if(ev.audioUrl) links.push(`<div class="hint" style="margin-bottom:6px">Запись звонка</div>${audioMarkup(ev.audioUrl)}`);
-  if(ev.bitrixUrl) links.push(`<div style="margin-top:${ev.audioUrl?"10px":"0"}"><a class="btn ghost sm" href="${esc(ev.bitrixUrl)}" target="_blank" rel="noopener">🔗 Открыть звонок в Битрикс</a></div>`);
+  const extLinks=[];
+  if(ev.bitrixUrl) extLinks.push(`<a class="btn ghost sm" href="${esc(ev.bitrixUrl)}" target="_blank" rel="noopener">🔗 Сделка в Bitrix24</a>`);
+  if(extLinks.length) links.push(`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:${ev.audioUrl?"10px":"0"}">${extLinks.join("")}</div>`);
   if(links.length) wrap.appendChild(el(`<div class="card" style="padding:12px">${links.join("")}</div>`));
   blank.sections.forEach(sec=>{
     const rows=sec.criteria.map(cr=>{
