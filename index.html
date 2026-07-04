@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Оценка звонков — Робокасса</title>
+<link rel="icon" type="image/png" href="v-rk-32.png">
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
@@ -88,6 +89,9 @@
   .crit-toggle.on{color:var(--warn);font-weight:600}
   .crit-toggle input{width:auto;margin:0}
   .cmt-link{color:var(--brand);cursor:pointer}
+  .cmt-link.req-link{color:var(--warn);font-weight:700}
+  .crit.needs-comment{box-shadow:inset 3px 0 0 var(--warn)}
+  .cmt-required{border-color:var(--warn)!important}
   .crit textarea{grid-column:1/-1;margin-top:4px;min-height:52px;resize:vertical}
   .crit.needs-fill{box-shadow:inset 3px 0 0 #f59e0b}
   .crit.is-critical{background:var(--warn-l)}
@@ -158,7 +162,7 @@
 <!-- ===== LOGIN ===== -->
 <div id="login">
   <div class="login-card">
-    <div class="brandmark">Р</div>
+    <img src="logo_robokassa_black.png" alt="Robokassa" style="height:26px;margin-bottom:16px" onerror="this.style.display='none'">
     <h1>Оценка звонков</h1>
     <p>Контроль качества · отдел продаж Робокасса</p>
     <div class="field">
@@ -178,7 +182,7 @@
 <div id="app" class="hidden">
   <header class="top">
     <div class="top-inner">
-      <div class="logo"><span class="brandmark">Р</span> Оценка звонков</div>
+      <div class="logo"><img src="v-rk-32.png" alt="" style="width:26px;height:26px" onerror="this.style.display='none'"> Оценка звонков</div>
       <nav class="tabs" id="tabs">
         <button data-tab="evaluate" class="active">Оценить звонок</button>
         <button data-tab="list">Оценки</button>
@@ -493,13 +497,13 @@ function renderEvaluate(){
   renderAudio();
 
   // секции бланка
-  wrap.appendChild(el(`<div class="hint" style="margin:2px 2px 8px"><span class="req">*</span> — обязательные пункты. Пока не заполнены, подсвечены жёлтой полосой слева.</div>`));
+  wrap.appendChild(el(`<div class="hint" style="margin:2px 2px 8px"><span class="req">*</span> — обязательные пункты (подсвечены жёлтой полосой, пока не заполнены). Если ставите балл ниже 100 — пояснение обязательно, красная полоса гаснет после комментария. Пояснения видит сотрудник.</div>`));
   const sectionsBox = document.createElement("div");
   blank.sections.forEach((sec,si)=>sectionsBox.appendChild(renderEvalSection(sec,si)));
   wrap.appendChild(sectionsBox);
 
   // комментарий контролёра
-  wrap.appendChild(el(`<div class="card"><div class="field" style="margin:0"><label>Общий комментарий контролёра</label><textarea id="ev-comment" style="min-height:70px">${esc(c.controllerComment)}</textarea></div></div>`));
+  wrap.appendChild(el(`<div class="card"><div class="field" style="margin:0"><label>Общий комментарий по звонку</label><textarea id="ev-comment" style="min-height:70px" placeholder="Свободный комментарий ко всему звонку — итог, сильные стороны, зоны роста. Виден сотруднику.">${esc(c.controllerComment)}</textarea></div></div>`));
 
   // итоги
   wrap.appendChild(renderTotals());
@@ -535,9 +539,11 @@ function renderCriterion(cr){
   const val = c.scores[cr.id];
   const isNA = (val===undefined||val===null);
   const isCrit = !!(c.critical && c.critical[cr.id]);
-  const openC = !!c._openComments[cr.id] || !!(c.comments[cr.id]);
+  const hasComment = !!(c.comments[cr.id] && c.comments[cr.id].trim());
+  const needsComment = !isNA && val<100 && !hasComment;
+  const openC = !!c._openComments[cr.id] || hasComment || needsComment;
   const needsFill = cr.required && isNA;
-  const row = el(`<div class="crit ${isCrit?"is-critical":""} ${needsFill?"needs-fill":""}">
+  const row = el(`<div class="crit ${isCrit?"is-critical":""} ${needsFill?"needs-fill":""} ${needsComment?"needs-comment":""}">
     <div>
       <div class="cname">${esc(cr.name)}${cr.required?'<span class="req">*</span>':""}${cr.weight&&cr.weight!==1?`<span class="wbadge">x${cr.weight}</span>`:'<span class="wbadge">x1</span>'}<span class="qmark" title="${esc(cr.hint)}">?</span></div>
       <div class="hint">${esc(cr.hint)}</div>
@@ -548,7 +554,7 @@ function renderCriterion(cr){
         <span class="sval ${isNA?"na":""}">${isNA?"—":val}</span>
         <span class="clear-link">Очистить</span>
         <label class="crit-toggle ${isCrit?"on":""}"><input type="checkbox" ${isCrit?"checked":""}> ⚠ Крит. ошибка</label>
-        <span class="cmt-link">${openC?"Комментарий":"+ Комментарий"}</span>
+        <span class="cmt-link ${needsComment?"req-link":""}">${needsComment?"⚠ Пояснить снижение":(openC?"Комментарий":"+ Комментарий")}</span>
       </div>
     </div>
   </div>`);
@@ -559,15 +565,15 @@ function renderCriterion(cr){
     const on = !isNA && val>=v && val>0;
     const zero = !isNA && val===0 && i===0;
     const d = el(`<div class="dot ${on?"on":""} ${zero?"zero":""}" title="${v}"></div>`);
-    d.onclick = ()=>{ c.scores[cr.id]=v; delete c._justCleared; render(); };
+    d.onclick = ()=>{ c.scores[cr.id]=v; if(v<100) c._openComments[cr.id]=true; render(); };
     dotsBox.appendChild(d);
   }
   row.querySelector(".clear-link").onclick = ()=>{ delete c.scores[cr.id]; render(); };
   row.querySelector(".crit-toggle input").onchange = e=>{ if(!c.critical)c.critical={}; if(e.target.checked)c.critical[cr.id]=true; else delete c.critical[cr.id]; render(); };
-  const cmtLink = row.querySelector(".cmt-link");
-  cmtLink.onclick = ()=>{ c._openComments[cr.id]=!c._openComments[cr.id]; render(); };
+  row.querySelector(".cmt-link").onclick = ()=>{ c._openComments[cr.id]=!c._openComments[cr.id]; render(); };
   if(openC){
-    const ta = el(`<textarea placeholder="Комментарий к критерию">${esc(c.comments[cr.id]||"")}</textarea>`);
+    const ph = (!isNA && val<100) ? "Обязательно: поясните, почему снизили балл — это увидит сотрудник" : "Комментарий к критерию";
+    const ta = el(`<textarea placeholder="${ph}" class="${needsComment?"cmt-required":""}">${esc(c.comments[cr.id]||"")}</textarea>`);
     ta.oninput = e=>c.comments[cr.id]=e.target.value;
     row.appendChild(ta);
   }
@@ -578,12 +584,15 @@ function renderTotals(){
   const c=state.current;
   const {sum, average, filled, hasCritical} = computeScore(c, state.blank);
   const missingReq = allCriteria(state.blank).filter(cr=>cr.required && (c.scores[cr.id]===undefined||c.scores[cr.id]===null)).length;
+  const needCmt = allCriteria(state.blank).filter(cr=>{const v=c.scores[cr.id]; return v!==undefined&&v!==null&&v<100&&!(c.comments[cr.id]&&c.comments[cr.id].trim());}).length;
   const reqChip = missingReq>0 ? `<div class="req-warn">Обязательных не заполнено: ${missingReq}</div>` : `<div class="req-ok">✓ Все обязательные заполнены</div>`;
+  const cmtChip = needCmt>0 ? `<div class="crit-warn">Пояснить снижения: ${needCmt}</div>` : "";
   const box = el(`<div class="totals">
     <div class="tot"><span>Средняя оценка</span><b class="avg">${average===null?"—":average}</b></div>
     <div class="tot"><span>Сумма оценок</span><b>${sum}</b></div>
     <div class="tot"><span>Заполнено критериев</span><b>${filled}</b></div>
     <div class="spacer"></div>
+    ${cmtChip}
     ${reqChip}
     ${hasCritical?'<div class="crit-warn">⚠ Критическая ошибка — итог обнулён</div>':""}
     <button class="btn" id="ev-save2">Сохранить оценку</button>
@@ -595,6 +604,14 @@ function renderTotals(){
 async function saveCurrentEvaluation(){
   const c = state.current, blank = state.blank;
   if(!c.employee){ toast("Выберите сотрудника"); return; }
+  // пояснение обязательно при снижении балла (< 100)
+  const noComment = allCriteria(blank).filter(cr=>{const v=c.scores[cr.id]; return v!==undefined&&v!==null&&v<100&&!(c.comments[cr.id]&&c.comments[cr.id].trim());});
+  if(noComment.length){
+    noComment.forEach(cr=>c._openComments[cr.id]=true);
+    render();
+    alert(`Поясните снижение по критериям (${noComment.length}):\n— ${noComment.map(m=>m.name).slice(0,6).join("\n— ")}${noComment.length>6?"\n…":""}\n\nПри баллах ниже 100 комментарий обязателен — его увидит сотрудник.`);
+    return;
+  }
   // проверка обязательных
   const missing = allCriteria(blank).filter(cr=>cr.required && (c.scores[cr.id]===undefined||c.scores[cr.id]===null));
   if(missing.length && !c._forceSave){
