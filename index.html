@@ -196,6 +196,7 @@
       <div class="logo"><img src="v-rk-32.png" alt="" style="width:26px;height:26px" onerror="this.style.display='none'"> Оценка звонков</div>
       <nav class="tabs" id="tabs">
         <button data-tab="evaluate" class="active">Оценить звонок</button>
+        <button data-tab="calls">Звонки из UIS</button>
         <button data-tab="list">Оценки</button>
         <button data-tab="stats">Сводная статистика</button>
         <button data-tab="blank">Бланк</button>
@@ -279,6 +280,12 @@ const DEFAULT_BLANK = {
     ]},
   ]
 };
+
+// --- Мост к UIS (Yandex Cloud Function) ---
+const UIS_BRIDGE = "https://functions.yandexcloud.net/d4eluh4seic56h6363mn";
+const UIS_SECRET = "uis-8f3k2p7q9x";
+function recUrl(cid, rid){ return `${UIS_BRIDGE}?s=${UIS_SECRET}&action=rec&cid=${encodeURIComponent(cid)}&rid=${encodeURIComponent(rid)}`; }
+function fmtDur(sec){ sec=+sec||0; const m=Math.floor(sec/60), s=sec%60; return `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`; }
 
 const DEFAULT_ROSTER = [
   {name:"Салибекян Степан", group:"Телемаркетинг", controller:true},
@@ -531,7 +538,7 @@ function monthSelect(evs, sel){
 
 function driveId(u){ let m=u.match(/\/file\/d\/([\w-]+)/); if(m) return m[1]; m=u.match(/[?&]id=([\w-]+)/); if(m) return m[1]; return null; }function audioMarkup(u){
   u=(u||"").trim(); if(!u) return "";
-  if(/\.(mp3|wav|ogg|m4a)(\?|$)/i.test(u)) return `<audio controls src="${esc(u)}" style="width:100%"></audio>`;
+  if(/\.(mp3|wav|ogg|m4a)(\?|$)/i.test(u) || u.includes("action=rec")) return `<audio controls src="${esc(u)}" style="width:100%"></audio>`;
   if(u.includes("drive.google.com")){ const id=driveId(u);
     if(id) return `<iframe src="https://drive.google.com/file/d/${id}/preview" style="width:100%;height:70px;border:0" allow="autoplay"></iframe><div style="margin-top:6px"><a href="${esc(u)}" target="_blank" rel="noopener" style="font-size:12.5px">Открыть в Google Drive</a></div>`;
   }
@@ -608,13 +615,14 @@ async function render(){
   else if(state.tab==="blank"){ v.innerHTML=""; v.appendChild(renderBlankEditor()); }
   else if(state.tab==="settings"){ v.innerHTML=""; v.appendChild(renderSettings()); }
   else if(state.tab==="mycalls"){ await ensureEvals(); v.innerHTML=""; v.appendChild(renderMyCalls()); }
+  else if(state.tab==="calls"){ await ensureEvals(); v.innerHTML=""; v.appendChild(renderCallsTab()); }
 }
 
 /* ============================================================
    6. ВКЛАДКА «ОЦЕНИТЬ ЗВОНОК»
    ============================================================ */
 function newEvaluation(){
-  state.current = { id:null, employee:"", group:"", phone:"", callDate:"", duration:"", audioUrl:"", bitrixUrl:"", crmUrl:"",
+  state.current = { id:null, employee:"", group:"", phone:"", callDate:"", duration:"", audioUrl:"", bitrixUrl:"", crmUrl:"", uisSession:"",
     blankName:state.blank.name, scores:{}, comments:{}, critical:{}, controllerComment:"",
     evaluatedBy:state.controller, createdAt:null, _openComments:{} };
 }
@@ -779,7 +787,7 @@ async function saveCurrentEvaluation(){
   const {sum, average, hasCritical} = computeScore(c, blank);
   const rec = {
     id:c.id, employee:c.employee, group:c.group||"", phone:c.phone||"", callDate:c.callDate||new Date().toISOString().slice(0,16),
-    duration:c.duration||"", audioUrl:c.audioUrl||"", bitrixUrl:c.bitrixUrl||"", crmUrl:c.crmUrl||"", blankName:blank.name,
+    duration:c.duration||"", audioUrl:c.audioUrl||"", bitrixUrl:c.bitrixUrl||"", crmUrl:c.crmUrl||"", uisSession:c.uisSession||"", blankName:blank.name,
     scores:c.scores, comments:c.comments, critical:c.critical||{}, controllerComment:c.controllerComment||"",
     average:average, sum:sum, hasCritical:hasCritical,
     evaluatedBy:c.evaluatedBy||state.controller, createdAt:c.createdAt||new Date().toISOString()
@@ -1198,6 +1206,96 @@ function renderEvalReadonly(ev){
   const {sum,average,hasCritical}=computeScore(ev,blank);
   wrap.appendChild(el(`<div class="totals"><div class="tot"><span>Средняя оценка</span><b class="avg">${fmtScore(average)}</b></div><div class="tot"><span>Сумма</span><b>${sum}</b></div>${hasCritical?'<div class="crit-warn">⚠ Критическая ошибка — итог обнулён</div>':""}<div class="spacer"></div></div>`));
   wrap.querySelector("#ro-back").onclick=()=>{ myCallsOpenEv=null; render(); };
+  return wrap;
+}
+
+/* ============================================================
+   ВКЛАДКА «ЗВОНКИ ИЗ UIS»
+   ============================================================ */
+function resolveEmployee(uisName){
+  const map = state.config.opMap || {};
+  if(map[uisName]) return map[uisName];
+  const exact = (state.config.roster||[]).find(r=>r.name.trim().toLowerCase()===String(uisName||"").trim().toLowerCase());
+  return exact ? exact.name : "";
+}
+function openEvalFromCall(call){
+  const emp = resolveEmployee(call.employee);
+  newEvaluation();
+  const c = state.current;
+  c.employee = emp;
+  const r = (state.config.roster||[]).find(x=>x.name===emp); c.group = r?r.group:"";
+  c.phone = call.phone || "";
+  c.callDate = String(call.start_time||"").replace(" ","T").slice(0,16);
+  c.duration = fmtDur(call.duration);
+  c.audioUrl = recUrl(call.cid, call.rid);
+  c.uisSession = String(call.session_id);
+  state.tab = "evaluate"; render();
+}
+let callsMonth = new Date().toISOString().slice(0,7);
+function renderCallsTab(){
+  const wrap=document.createElement("div");
+  const head=el(`<div class="page-head"><h2>Звонки из UIS</h2>
+    <div style="display:flex;gap:10px;align-items:center">
+      <input type="month" id="calls-month" value="${callsMonth}" style="width:auto">
+      <button class="btn sm" id="calls-load">Загрузить</button>
+    </div></div>`);
+  wrap.appendChild(head);
+  const res=el(`<div id="calls-results"></div>`);
+  wrap.appendChild(res);
+
+  const load=async()=>{
+    callsMonth = head.querySelector("#calls-month").value || callsMonth;
+    res.innerHTML='<div class="empty">Загрузка звонков из UIS…</div>';
+    const from = callsMonth+"-01", till = callsMonth+"-31";
+    let data;
+    try{
+      const r = await fetch(`${UIS_BRIDGE}?s=${UIS_SECRET}&action=calls&from=${from}&till=${till}`);
+      data = await r.json();
+    }catch(e){ res.innerHTML=`<div class="card empty">Не удалось связаться с мостом UIS: ${esc(String(e))}</div>`; return; }
+    if(data.uis_error){ res.innerHTML=`<div class="card empty">UIS: ${esc(data.uis_error.message||JSON.stringify(data.uis_error))}</div>`; return; }
+    if(data.error){ res.innerHTML=`<div class="card empty">${esc(data.error)}</div>`; return; }
+    const calls = data.calls || [];
+    if(!calls.length){ res.innerHTML=`<div class="card empty">За ${esc(monthLabel(callsMonth))} звонков с записью не найдено (всего в периоде: ${data.total_in_period||0}).</div>`; return; }
+
+    res.innerHTML="";
+    res.appendChild(el(`<div class="hint" style="margin:0 2px 10px">Найдено звонков с записью: ${calls.length}. Если оператор UIS не сопоставлен с сотрудником — выберите его один раз, связка запомнится.</div>`));
+    const t=el(`<div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Оператор UIS</th><th>Сотрудник</th><th>Номер</th><th class="num">Длит.</th><th>Напр.</th><th>Запись</th><th></th></tr></thead><tbody></tbody></table></div>`);
+    const tb=t.querySelector("tbody");
+    calls.forEach(call=>{
+      const emp=resolveEmployee(call.employee);
+      const done=(state.evals||[]).some(ev=>ev.uisSession&&String(ev.uisSession)===String(call.session_id));
+      const row=el(`<tr>
+        <td>${fmtDate(String(call.start_time||"").replace(" ","T"))}</td>
+        <td>${esc(call.employee)||"—"}</td>
+        <td class="emp-cell"></td>
+        <td>${esc(call.phone)||"—"}</td>
+        <td class="num">${fmtDur(call.duration)}</td>
+        <td>${call.direction==="in"?"вх":"исх"}</td>
+        <td class="rec-cell"><button class="icon-btn play">▶ Слушать</button></td>
+        <td class="act-cell"></td>
+      </tr>`);
+      const empCell=row.querySelector(".emp-cell");
+      if(emp){ empCell.textContent=emp; }
+      else {
+        const sel=el(`<select style="width:auto;min-width:150px"><option value="">— выберите —</option>${(state.config.roster||[]).map(r=>`<option>${esc(r.name)}</option>`).join("")}</select>`);
+        sel.onchange=async e=>{ const map={...(state.config.opMap||{})}; map[call.employee]=e.target.value; state.config.opMap=map; await Store.saveConfig(state.config); load(); };
+        empCell.appendChild(sel);
+      }
+      row.querySelector(".play").onclick=e=>{
+        const cell=e.target.closest("td");
+        cell.innerHTML=`<audio controls autoplay src="${recUrl(call.cid,call.rid)}" style="height:34px;max-width:230px"></audio>`;
+      };
+      const act=row.querySelector(".act-cell");
+      if(done){ act.innerHTML=`<span class="pill g">оценён</span>`; }
+      else if(emp){ const b=el(`<button class="btn sm">Оценить</button>`); b.onclick=()=>openEvalFromCall(call); act.appendChild(b); }
+      else { act.innerHTML=`<span class="hint">выберите сотрудника</span>`; }
+      tb.appendChild(row);
+    });
+    res.appendChild(t);
+  };
+  head.querySelector("#calls-load").onclick=load;
+  head.querySelector("#calls-month").onchange=load;
+  load();
   return wrap;
 }
 
