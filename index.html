@@ -282,7 +282,7 @@ const DEFAULT_BLANK = {
 };
 
 // --- Мост к UIS (Yandex Cloud Function) ---
-const UIS_BRIDGE = "https://functions.yandexcloud.net/d4eluh4seic56h6363mn";
+const UIS_BRIDGE = "http://51.250.88.255:8080";
 const UIS_SECRET = "uis-8f3k2p7q9x";
 function recUrl(cid, rid){ return `${UIS_BRIDGE}?s=${UIS_SECRET}&action=rec&cid=${encodeURIComponent(cid)}&rid=${encodeURIComponent(rid)}`; }
 function fmtDur(sec){ sec=+sec||0; const m=Math.floor(sec/60), s=sec%60; return `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`; }
