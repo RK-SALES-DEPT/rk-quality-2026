@@ -282,7 +282,7 @@ const DEFAULT_BLANK = {
 };
 
 // --- Мост к UIS (Yandex Cloud Function) ---
-const UIS_BRIDGE = "http://51.250.88.255:8080";
+const UIS_BRIDGE = "https://functions.yandexcloud.net/d4eluh4seic56h6363mn";
 const UIS_SECRET = "uis-8f3k2p7q9x";
 function recUrl(cid, rid){ return `${UIS_BRIDGE}?s=${UIS_SECRET}&action=rec&cid=${encodeURIComponent(cid)}&rid=${encodeURIComponent(rid)}`; }
 function fmtDur(sec){ sec=+sec||0; const m=Math.floor(sec/60), s=sec%60; return `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`; }
@@ -565,27 +565,31 @@ function fillLoginControllers(){
   const sel = $("#loginWho");
   sel.innerHTML = state.config.roster.map(c=>`<option value="${esc(c.name)}">${esc(c.name)}${c.controller?" (контролёр)":""}</option>`).join("");
 }
+function enterApp(user, name){
+  state.currentUser = user; state.controller = name;
+  state.role = (user && user.controller) ? "controller" : "employee";
+  $("#login").classList.add("hidden");
+  $("#app").classList.remove("hidden");
+  $("#whoLabel").textContent = state.role==="controller" ? "Оценивает: " : "Вход: ";
+  $("#whoName").textContent = name;
+  if(Store.backend==="memory") $("#demoBanner").classList.remove("hidden");
+  if(state.role==="employee"){ document.querySelector("nav.tabs").style.display="none"; state.tab="mycalls"; }
+  render();
+}
 $("#loginBtn").onclick = async ()=>{
   const name = $("#loginWho").value;
   const user = state.config.roster.find(r=>r.name===name);
   const hash = await sha256($("#loginPass").value);
   const expected = (user && user.passHash) ? user.passHash : (state.config.accessPassHash||DEFAULT_PASS_HASH);
   if(hash === expected){
-    state.currentUser = user; state.controller = name;
-    state.role = (user && user.controller) ? "controller" : "employee";
-    $("#login").classList.add("hidden");
-    $("#app").classList.remove("hidden");
-    $("#whoLabel").textContent = state.role==="controller" ? "Оценивает: " : "Вход: ";
-    $("#whoName").textContent = name;
-    if(Store.backend==="memory") $("#demoBanner").classList.remove("hidden");
-    if(state.role==="employee"){ document.querySelector("nav.tabs").style.display="none"; state.tab="mycalls"; }
-    render();
+    try{ localStorage.setItem("qc_session", JSON.stringify({name})); }catch(e){}
+    enterApp(user, name);
   } else {
     $("#loginErr").textContent = "Неверный пароль";
   }
 };
 $("#loginPass").addEventListener("keydown",e=>{ if(e.key==="Enter") $("#loginBtn").click(); });
-$("#logoutBtn").onclick = ()=>{ location.reload(); };
+$("#logoutBtn").onclick = ()=>{ try{ localStorage.removeItem("qc_session"); }catch(e){} location.reload(); };
 
 /* ============================================================
    5. ROUTER / TABS
@@ -1232,38 +1236,66 @@ function openEvalFromCall(call){
   state.tab = "evaluate"; render();
 }
 let callsMonth = new Date().toISOString().slice(0,7);
+let callsData = [];
+let callFilters = { date:"", durMin:"", durMax:"", status:"", phone:"", fio:"", group:"" };
+function resolveGroup(uisName){ const emp=resolveEmployee(uisName); const r=(state.config.roster||[]).find(x=>x.name===emp); return r?r.group:""; }
+function callEvaluated(c){ return (state.evals||[]).some(ev=>ev.uisSession&&String(ev.uisSession)===String(c.session_id)); }
 function renderCallsTab(){
   const wrap=document.createElement("div");
-  const head=el(`<div class="page-head"><h2>Звонки из UIS</h2>
+  const groups=[...new Set((state.config.roster||[]).map(r=>r.group))];
+  wrap.appendChild(el(`<div class="page-head"><h2>Звонки из UIS</h2>
     <div style="display:flex;gap:10px;align-items:center">
       <input type="month" id="calls-month" value="${callsMonth}" style="width:auto">
       <button class="btn sm" id="calls-load">Загрузить</button>
-    </div></div>`);
-  wrap.appendChild(head);
+    </div></div>`));
+
+  const f=el(`<div class="card"><div class="filters">
+    <div class="field"><label>Дата звонка</label><input type="date" id="f-date" value="${callFilters.date}"></div>
+    <div class="field"><label>ФИО (оператор)</label><input id="f-fio" value="${esc(callFilters.fio)}" placeholder="часть имени"></div>
+    <div class="field"><label>Номер</label><input id="f-phone" value="${esc(callFilters.phone)}" placeholder="часть номера"></div>
+    <div class="field"><label>Длит. от (сек)</label><input type="number" id="f-dmin" value="${esc(callFilters.durMin)}" min="0" style="max-width:110px"></div>
+    <div class="field"><label>Длит. до (сек)</label><input type="number" id="f-dmax" value="${esc(callFilters.durMax)}" min="0" style="max-width:110px"></div>
+    <div class="field"><label>Группа</label><select id="f-group"><option value="">Все</option>${groups.map(g=>`<option ${callFilters.group===g?"selected":""}>${esc(g)}</option>`).join("")}</select></div>
+    <div class="field"><label>Статус</label><select id="f-status">
+      <option value="" ${callFilters.status===""?"selected":""}>Все</option>
+      <option value="new" ${callFilters.status==="new"?"selected":""}>Не оценён</option>
+      <option value="done" ${callFilters.status==="done"?"selected":""}>Оценён</option>
+    </select></div>
+    <button class="btn ghost sm" id="f-reset">Сбросить</button>
+  </div></div>`);
+  wrap.appendChild(f);
+
   const res=el(`<div id="calls-results"></div>`);
   wrap.appendChild(res);
 
-  const load=async()=>{
-    callsMonth = head.querySelector("#calls-month").value || callsMonth;
-    res.innerHTML='<div class="empty">Загрузка звонков из UIS…</div>';
-    const from = callsMonth+"-01", till = callsMonth+"-31";
-    let data;
-    try{
-      const r = await fetch(`${UIS_BRIDGE}?s=${UIS_SECRET}&action=calls&from=${from}&till=${till}`);
-      data = await r.json();
-    }catch(e){ res.innerHTML=`<div class="card empty">Не удалось связаться с мостом UIS: ${esc(String(e))}</div>`; return; }
-    if(data.uis_error){ res.innerHTML=`<div class="card empty">UIS: ${esc(data.uis_error.message||JSON.stringify(data.uis_error))}</div>`; return; }
-    if(data.error){ res.innerHTML=`<div class="card empty">${esc(data.error)}</div>`; return; }
-    const calls = data.calls || [];
-    if(!calls.length){ res.innerHTML=`<div class="card empty">За ${esc(monthLabel(callsMonth))} звонков с записью не найдено (всего в периоде: ${data.total_in_period||0}).</div>`; return; }
+  const readFilters=()=>{
+    callFilters.date=f.querySelector("#f-date").value;
+    callFilters.fio=f.querySelector("#f-fio").value;
+    callFilters.phone=f.querySelector("#f-phone").value;
+    callFilters.durMin=f.querySelector("#f-dmin").value;
+    callFilters.durMax=f.querySelector("#f-dmax").value;
+    callFilters.group=f.querySelector("#f-group").value;
+    callFilters.status=f.querySelector("#f-status").value;
+  };
+
+  const applyRender=()=>{
+    let rows=callsData.slice();
+    if(callFilters.date) rows=rows.filter(c=>String(c.start_time||"").slice(0,10)===callFilters.date);
+    if(callFilters.durMin) rows=rows.filter(c=>(+c.duration||0)>=+callFilters.durMin);
+    if(callFilters.durMax) rows=rows.filter(c=>(+c.duration||0)<=+callFilters.durMax);
+    if(callFilters.phone){ const q=callFilters.phone.trim(); rows=rows.filter(c=>String(c.phone||"").includes(q)); }
+    if(callFilters.fio){ const q=callFilters.fio.trim().toLowerCase(); rows=rows.filter(c=>String(c.employee||"").toLowerCase().includes(q)||resolveEmployee(c.employee).toLowerCase().includes(q)); }
+    if(callFilters.group) rows=rows.filter(c=>resolveGroup(c.employee)===callFilters.group);
+    if(callFilters.status) rows=rows.filter(c=>callFilters.status==="done"?callEvaluated(c):!callEvaluated(c));
 
     res.innerHTML="";
-    res.appendChild(el(`<div class="hint" style="margin:0 2px 10px">Найдено звонков с записью: ${calls.length}. Если оператор UIS не сопоставлен с сотрудником — выберите его один раз, связка запомнится.</div>`));
+    res.appendChild(el(`<div class="hint" style="margin:0 2px 10px">Показано: ${rows.length} из ${callsData.length}. Если оператор UIS не сопоставлен с сотрудником — выберите его один раз, связка запомнится.</div>`));
+    if(!rows.length){ res.appendChild(el(`<div class="card empty">Под фильтры ничего не подошло.</div>`)); return; }
     const t=el(`<div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Оператор UIS</th><th>Сотрудник</th><th>Номер</th><th class="num">Длит.</th><th>Напр.</th><th>Запись</th><th></th></tr></thead><tbody></tbody></table></div>`);
     const tb=t.querySelector("tbody");
-    calls.forEach(call=>{
+    rows.forEach(call=>{
       const emp=resolveEmployee(call.employee);
-      const done=(state.evals||[]).some(ev=>ev.uisSession&&String(ev.uisSession)===String(call.session_id));
+      const done=callEvaluated(call);
       const row=el(`<tr>
         <td>${fmtDate(String(call.start_time||"").replace(" ","T"))}</td>
         <td>${esc(call.employee)||"—"}</td>
@@ -1278,13 +1310,10 @@ function renderCallsTab(){
       if(emp){ empCell.textContent=emp; }
       else {
         const sel=el(`<select style="width:auto;min-width:150px"><option value="">— выберите —</option>${(state.config.roster||[]).map(r=>`<option>${esc(r.name)}</option>`).join("")}</select>`);
-        sel.onchange=async e=>{ const map={...(state.config.opMap||{})}; map[call.employee]=e.target.value; state.config.opMap=map; await Store.saveConfig(state.config); load(); };
+        sel.onchange=async e=>{ const map={...(state.config.opMap||{})}; map[call.employee]=e.target.value; state.config.opMap=map; await Store.saveConfig(state.config); applyRender(); };
         empCell.appendChild(sel);
       }
-      row.querySelector(".play").onclick=e=>{
-        const cell=e.target.closest("td");
-        cell.innerHTML=`<audio controls autoplay src="${recUrl(call.cid,call.rid)}" style="height:34px;max-width:230px"></audio>`;
-      };
+      row.querySelector(".play").onclick=e=>{ e.target.closest("td").innerHTML=`<audio controls autoplay src="${recUrl(call.cid,call.rid)}" style="height:34px;max-width:230px"></audio>`; };
       const act=row.querySelector(".act-cell");
       if(done){ act.innerHTML=`<span class="pill g">оценён</span>`; }
       else if(emp){ const b=el(`<button class="btn sm">Оценить</button>`); b.onclick=()=>openEvalFromCall(call); act.appendChild(b); }
@@ -1293,8 +1322,31 @@ function renderCallsTab(){
     });
     res.appendChild(t);
   };
-  head.querySelector("#calls-load").onclick=load;
-  head.querySelector("#calls-month").onchange=load;
+
+  const load=async()=>{
+    callsMonth = wrap.querySelector("#calls-month").value || callsMonth;
+    res.innerHTML='<div class="empty">Загрузка звонков из UIS…</div>';
+    const from = callsMonth+"-01", till = callsMonth+"-31";
+    let data;
+    try{
+      const r = await fetch(`${UIS_BRIDGE}?s=${UIS_SECRET}&action=calls&from=${from}&till=${till}`);
+      data = await r.json();
+    }catch(e){ res.innerHTML=`<div class="card empty">Не удалось связаться с мостом UIS: ${esc(String(e))}</div>`; return; }
+    if(data.uis_error){ res.innerHTML=`<div class="card empty">UIS: ${esc(data.uis_error.message||JSON.stringify(data.uis_error))}</div>`; return; }
+    if(data.error){ res.innerHTML=`<div class="card empty">${esc(data.error)}</div>`; return; }
+    callsData = data.calls || [];
+    if(!callsData.length){ res.innerHTML=`<div class="card empty">За ${esc(monthLabel(callsMonth))} звонков с записью не найдено (всего в периоде: ${data.total_in_period||0}).</div>`; return; }
+    applyRender();
+  };
+
+  wrap.querySelector("#calls-load").onclick=load;
+  wrap.querySelector("#calls-month").onchange=load;
+  f.querySelectorAll("input,select").forEach(inp=>{
+    const ev = inp.tagName==="SELECT"||inp.type==="date" ? "change" : "input";
+    inp.addEventListener(ev, ()=>{ readFilters(); if(callsData.length) applyRender(); });
+  });
+  f.querySelector("#f-reset").onclick=()=>{ callFilters={date:"",durMin:"",durMax:"",status:"",phone:"",fio:"",group:""}; render(); };
+
   load();
   return wrap;
 }
@@ -1305,6 +1357,13 @@ function renderCallsTab(){
 (async function boot(){
   await Store.init();
   fillLoginControllers();
+  try{
+    const saved = JSON.parse(localStorage.getItem("qc_session")||"null");
+    if(saved && saved.name){
+      const user = state.config.roster.find(r=>r.name===saved.name);
+      if(user) enterApp(user, saved.name);
+    }
+  }catch(e){}
 })();
 </script>
 </body>
