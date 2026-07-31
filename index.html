@@ -197,6 +197,7 @@
       <nav class="tabs" id="tabs">
         <button data-tab="evaluate" class="active">Оценить звонок</button>
         <button data-tab="calls">Звонки из UIS</button>
+        <button data-tab="dashboard">Дашборд активности</button>
         <button data-tab="list">Оценки</button>
         <button data-tab="stats">Сводная статистика</button>
         <button data-tab="blank">Бланк</button>
@@ -610,6 +611,7 @@ async function ensureEvals(force){
   }
 }
 async function render(){
+  if(dashTimer){ clearInterval(dashTimer); dashTimer=null; }
   if(state.role==="employee") state.tab="mycalls";
   setActiveTab();
   const v = $("#view");
@@ -620,6 +622,7 @@ async function render(){
   else if(state.tab==="settings"){ v.innerHTML=""; v.appendChild(renderSettings()); }
   else if(state.tab==="mycalls"){ await ensureEvals(); v.innerHTML=""; v.appendChild(renderMyCalls()); }
   else if(state.tab==="calls"){ await ensureEvals(); v.innerHTML=""; v.appendChild(renderCallsTab()); }
+  else if(state.tab==="dashboard"){ v.innerHTML=""; v.appendChild(renderDashboard()); }
 }
 
 /* ============================================================
@@ -1279,7 +1282,7 @@ function renderCallsTab(){
   };
 
   const applyRender=()=>{
-    let rows=callsData.slice();
+    let rows=callsData.filter(c=>c.rid);
     if(callFilters.date) rows=rows.filter(c=>String(c.start_time||"").slice(0,10)===callFilters.date);
     if(callFilters.durMin) rows=rows.filter(c=>(+c.duration||0)>=+callFilters.durMin);
     if(callFilters.durMax) rows=rows.filter(c=>(+c.duration||0)<=+callFilters.durMax);
@@ -1347,6 +1350,107 @@ function renderCallsTab(){
   });
   f.querySelector("#f-reset").onclick=()=>{ callFilters={date:"",durMin:"",durMax:"",status:"",phone:"",fio:"",group:""}; render(); };
 
+  load();
+  return wrap;
+}
+
+/* ============================================================
+   ВКЛАДКА «ДАШБОРД АКТИВНОСТИ»
+   ============================================================ */
+let dashFrom="", dashTill="", dashAuto=false, dashTimer=null, dashData=[], dashUpdated="";
+function fmtTalk(sec){ sec=Math.round(+sec||0); const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60); return h?`${h}ч ${m}м`:`${m}м`; }
+function renderDashboard(){
+  const wrap=document.createElement("div");
+  if(!dashFrom){ const now=new Date(); dashFrom=now.toISOString().slice(0,8)+"01"; dashTill=now.toISOString().slice(0,10); }
+  const head=el(`<div class="page-head"><h2>Дашборд активности</h2>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn ghost sm" data-preset="day">День</button>
+      <button class="btn ghost sm" data-preset="week">Неделя</button>
+      <button class="btn ghost sm" data-preset="month">Месяц</button>
+      <input type="date" id="d-from" value="${dashFrom}" style="width:auto">
+      <input type="date" id="d-till" value="${dashTill}" style="width:auto">
+      <label style="display:flex;gap:5px;align-items:center;color:var(--muted);font-size:12.5px"><input type="checkbox" id="d-auto" ${dashAuto?"checked":""}> авто 2 мин</label>
+      <button class="btn sm" id="d-load">Обновить</button>
+    </div></div>`);
+  wrap.appendChild(head);
+  const res=el(`<div id="dash-res"><div class="empty">Загрузка…</div></div>`);
+  wrap.appendChild(res);
+
+  const draw=()=>{
+    const byEmp={}; let unmapped=0;
+    (dashData||[]).forEach(c=>{
+      const emp=resolveEmployee(c.employee);
+      const r=(state.config.roster||[]).find(x=>x.name===emp);
+      if(!emp){ unmapped++; return; }
+      if(!r || r.group!=="Телемаркетинг") return;
+      const e=byEmp[emp]=byEmp[emp]||{out:0,out30:0,inb:0,missed:0,talk:0,firsts:{}};
+      const dur=+c.duration||0;
+      e.talk+=dur;
+      if(c.direction==="out"){
+        e.out++; if(dur>=30) e.out30++;
+        const day=String(c.start_time||"").slice(0,10), t=String(c.start_time||"").slice(11,16);
+        if(t && (!e.firsts[day] || t<e.firsts[day])) e.firsts[day]=t;
+      } else if(c.direction==="in"){
+        e.inb++; if(c.is_lost) e.missed++;
+      }
+    });
+    const names=Object.keys(byEmp).sort();
+    res.innerHTML="";
+    res.appendChild(el(`<div class="hint" style="margin:0 2px 10px">Период: ${esc(dashFrom)} — ${esc(dashTill)} · обновлено в ${esc(dashUpdated)}${unmapped?` · <span style="color:var(--warn)">не сопоставлено операторов в звонках: ${unmapped} (сопоставьте во вкладке «Звонки из UIS»)</span>`:""}</div>`));
+    if(!names.length){ res.appendChild(el(`<div class="card empty">За период нет звонков по ТЛМ (или операторы не сопоставлены).</div>`)); return; }
+    const t=el(`<div class="tbl-wrap"><table><thead><tr>
+      <th>Сотрудник</th><th class="num">Начало (сред.)</th><th class="num">Исходящие</th><th class="num">Исход. ≥30с</th><th class="num">Конверсия</th><th class="num">Входящие</th><th class="num">Пропущ.</th><th class="num">Время на линии</th>
+    </tr></thead><tbody></tbody></table></div>`);
+    const tb=t.querySelector("tbody");
+    const tot={out:0,out30:0,inb:0,missed:0,talk:0};
+    names.forEach(name=>{
+      const e=byEmp[name];
+      const days=Object.values(e.firsts);
+      let start="—";
+      if(days.length){ const mins=days.map(x=>{const p=x.split(":");return (+p[0])*60+(+p[1]);}); const a=Math.round(mins.reduce((x,y)=>x+y,0)/mins.length); start=`${String(Math.floor(a/60)).padStart(2,"0")}:${String(a%60).padStart(2,"0")}`; }
+      const conv=e.out? Math.round(e.out30/e.out*1000)/10 : null;
+      const late = start!=="—" && start>"09:15";
+      tot.out+=e.out; tot.out30+=e.out30; tot.inb+=e.inb; tot.missed+=e.missed; tot.talk+=e.talk;
+      tb.appendChild(el(`<tr>
+        <td>${esc(name)}</td>
+        <td class="num" ${late?'style="color:var(--warn);font-weight:700"':""}>${start}</td>
+        <td class="num">${e.out}</td>
+        <td class="num">${e.out30}</td>
+        <td class="num">${conv==null?"—":`<span class="pill ${conv>=50?"g":conv>=30?"n":"r"}">${conv}%</span>`}</td>
+        <td class="num">${e.inb}</td>
+        <td class="num">${e.missed?`<span class="pill r">${e.missed}</span>`:"0"}</td>
+        <td class="num">${fmtTalk(e.talk)}</td>
+      </tr>`));
+    });
+    const tconv=tot.out?Math.round(tot.out30/tot.out*1000)/10:null;
+    tb.appendChild(el(`<tr class="total-row"><td>Итого</td><td class="num"></td><td class="num">${tot.out}</td><td class="num">${tot.out30}</td><td class="num">${tconv==null?"—":tconv+"%"}</td><td class="num">${tot.inb}</td><td class="num">${tot.missed}</td><td class="num">${fmtTalk(tot.talk)}</td></tr>`));
+    res.appendChild(t);
+    res.appendChild(el(`<div class="hint" style="margin:10px 2px">Начало работы = среднее время первого исходящего звонка за день (график 9:00–18:00, пн–пт). Конверсия = исход. ≥30с ÷ всего исходящих. Красным — начало позже 09:15 и пропущенные.</div>`));
+  };
+
+  const load=async()=>{
+    dashFrom=head.querySelector("#d-from").value; dashTill=head.querySelector("#d-till").value;
+    res.innerHTML='<div class="empty">Загрузка из UIS…</div>';
+    let data;
+    try{ const r=await fetch(`${UIS_BRIDGE}?s=${UIS_SECRET}&action=calls&from=${dashFrom}&till=${dashTill}`); data=await r.json(); }
+    catch(e){ res.innerHTML=`<div class="card empty">Ошибка связи с мостом: ${esc(String(e))}</div>`; return; }
+    if(data.uis_error){ res.innerHTML=`<div class="card empty">UIS: ${esc(data.uis_error.message||JSON.stringify(data.uis_error))}</div>`; return; }
+    if(data.error){ res.innerHTML=`<div class="card empty">${esc(data.error)}</div>`; return; }
+    dashData=data.calls||[]; dashUpdated=new Date().toLocaleTimeString("ru-RU");
+    draw();
+  };
+
+  head.querySelectorAll("[data-preset]").forEach(b=>b.onclick=()=>{
+    const now=new Date(), till=now.toISOString().slice(0,10); let from;
+    if(b.dataset.preset==="day") from=till;
+    else if(b.dataset.preset==="week"){ const d=new Date(now); d.setDate(d.getDate()-6); from=d.toISOString().slice(0,10); }
+    else from=now.toISOString().slice(0,8)+"01";
+    head.querySelector("#d-from").value=from; head.querySelector("#d-till").value=till;
+    load();
+  });
+  head.querySelector("#d-load").onclick=load;
+  head.querySelector("#d-auto").onchange=e=>{ dashAuto=e.target.checked; if(dashTimer){clearInterval(dashTimer);dashTimer=null;} if(dashAuto) dashTimer=setInterval(load,120000); };
+  if(dashAuto){ if(dashTimer) clearInterval(dashTimer); dashTimer=setInterval(load,120000); }
   load();
   return wrap;
 }
